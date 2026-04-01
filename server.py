@@ -14,6 +14,8 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from eval_client import EvalClient
+from eval_store import pick_eval_references
 from orchestrator import preprocess_input
 from prompt_builder import analyze_photo, assemble_keywords, expand_prompt, validate_prompt, build_negative_prompt
 
@@ -367,6 +369,141 @@ async def generate_sweep(
         "total": len(combos),
         "success": len(results),
         "failed": len(errors),
+        "results": results,
+        "errors": errors,
+    }
+
+
+@app.post("/api/pipeline")
+async def pipeline(
+    input_json: str = Form(...),
+    count: int = Form(10),
+    use_refs: bool = Form(True),
+    ref_count: int = Form(2),
+    anchor_photo: UploadFile | None = File(None),
+):
+    """One-click pipeline: JSON+photo → prompt → batch generate (with photo as ref) → eval → ranked.
+
+    This is the main endpoint. It:
+    1. Builds prompt from JSON + photo (LLM photo analysis → keywords → expand)
+    2. Batch generates N images using the same logic as generate_batch
+       (with anchor_photo + fewshot refs passed to Seedream)
+    3. Evals each image and returns results sorted by score
+    """
+    try:
+        input_data = json.loads(input_json)
+    except json.JSONDecodeError as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid JSON: {e}"})
+
+    input_data = preprocess_input(input_data)
+    llm = _get_llm_client()
+
+    # --- Step 1: Build prompt ---
+    photo_bytes = None
+    if anchor_photo:
+        photo_bytes = await anchor_photo.read()
+        input_data["photo_analysis"] = analyze_photo(llm, photo_bytes)
+    elif not input_data.get("photo_analysis"):
+        return JSONResponse(status_code=400, content={"error": "No photo provided"})
+
+    keywords = assemble_keywords(llm, input_data)
+    prompt = expand_prompt(llm, keywords)
+    validate_prompt(prompt, input_data)
+    negative_prompt = build_negative_prompt()
+    logger.info("Pipeline: prompt built (%d chars)", len(prompt))
+
+    # --- Step 2: Batch generate (same as generate_batch) ---
+    images_bytes = [photo_bytes] if photo_bytes else None
+
+    extra_kwargs = {
+        "guidance_scale": 8.0,
+        "cfg_rescale_factor": 0.0,
+        "single_edit_guidance_weight": 2.0,
+        "single_edit_guidance_weight_image": 1.0,
+    }
+
+    if use_refs:
+        refs = pick_references(ref_count)
+        images_bytes = _inject_references(images_bytes, refs)
+        extra_kwargs.update(_build_ref_kwargs(prompt, refs))
+
+    seeds = [randint(0, 2**31) for _ in range(count)]
+
+    def _call(seed: int):
+        return seed, client.generate(
+            prompt=prompt,
+            images=images_bytes,
+            width=2048,
+            height=2048,
+            seed=seed,
+            negative_prompt=negative_prompt,
+            force_single=True,
+            **extra_kwargs,
+        )
+
+    results = []
+    errors = []
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    with ThreadPoolExecutor(max_workers=min(count, 10)) as pool:
+        future_to_seed = {pool.submit(_call, s): s for s in seeds}
+        for future in as_completed(future_to_seed):
+            seed = future_to_seed[future]
+            try:
+                seed, result = future.result()
+                for i, img in enumerate(result.images):
+                    path = os.path.join(OUTPUT_DIR, f"{timestamp}_s{seed}_{i}.jpg")
+                    with open(path, "wb") as f:
+                        f.write(img)
+                results.append({
+                    "seed": seed,
+                    "request_id": result.request_id,
+                    "llm_result": result.llm_result,
+                    "_raw_images": result.images,
+                    "images": [
+                        f"data:image/jpeg;base64,{base64.b64encode(img).decode()}"
+                        for img in result.images
+                    ],
+                })
+            except SeedreamAPIError as e:
+                logger.error("Pipeline seed=%d error: %s", seed, e)
+                errors.append({"seed": seed, "error": str(e)})
+            except Exception as e:
+                logger.error("Pipeline seed=%d unexpected: %s", seed, e)
+                errors.append({"seed": seed, "error": str(e)})
+
+    # --- Step 3: Eval each result ---
+    eval_c = EvalClient()
+    good_refs, bad_refs = pick_eval_references()
+
+    for r in results:
+        raw = r.pop("_raw_images", [])
+        if raw:
+            try:
+                ev = eval_c.evaluate(
+                    generated_image=raw[0],
+                    input_data=input_data,
+                    good_refs=good_refs,
+                    bad_refs=bad_refs,
+                )
+                r["eval"] = {
+                    "score": ev.total_score,
+                    "passed": ev.passed,
+                    "dimensions": ev.dimensions,
+                    "issues": ev.issues,
+                }
+                logger.info("Pipeline eval seed=%d score=%.1f", r["seed"], ev.total_score)
+            except Exception as e:
+                logger.error("Pipeline eval seed=%d error: %s", r["seed"], e)
+                r["eval"] = {"score": 0, "passed": False, "dimensions": {}, "issues": [str(e)]}
+
+    results.sort(key=lambda r: r.get("eval", {}).get("score", 0), reverse=True)
+
+    return {
+        "total": count,
+        "success": len(results),
+        "failed": len(errors),
+        "prompt": prompt,
         "results": results,
         "errors": errors,
     }
