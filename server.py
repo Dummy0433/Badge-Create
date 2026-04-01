@@ -509,4 +509,143 @@ async def pipeline(
     }
 
 
+@app.post("/api/pipeline_sweep")
+async def pipeline_sweep(
+    input_json: str = Form(...),
+    use_refs: bool = Form(True),
+    ref_count: int = Form(2),
+    guidance_scales: str = Form("8.0"),
+    cfg_rescale_factors: str = Form("0.0"),
+    edit_text_weights: str = Form("2.0"),
+    edit_image_weights: str = Form("1.0"),
+    anchor_photo: UploadFile | None = File(None),
+):
+    """Sweep pipeline: JSON+photo → prompt → param sweep generate → eval → ranked."""
+    try:
+        input_data = json.loads(input_json)
+    except json.JSONDecodeError as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid JSON: {e}"})
+
+    input_data = preprocess_input(input_data)
+    llm = _get_llm_client()
+
+    # Step 1: Build prompt
+    photo_bytes = None
+    if anchor_photo:
+        photo_bytes = await anchor_photo.read()
+        input_data["photo_analysis"] = analyze_photo(llm, photo_bytes)
+    elif not input_data.get("photo_analysis"):
+        return JSONResponse(status_code=400, content={"error": "No photo provided"})
+
+    keywords = assemble_keywords(llm, input_data)
+    prompt = expand_prompt(llm, keywords)
+    validate_prompt(prompt, input_data)
+    negative_prompt = build_negative_prompt()
+
+    # Step 2: Build param combos
+    def _parse_floats(s: str) -> list[float]:
+        return [float(x.strip()) for x in s.split(",") if x.strip()]
+
+    gs_list = _parse_floats(guidance_scales)
+    cfg_list = _parse_floats(cfg_rescale_factors)
+    tw_list = _parse_floats(edit_text_weights)
+    iw_list = _parse_floats(edit_image_weights)
+
+    images_bytes = [photo_bytes] if photo_bytes else None
+    base_kwargs = {}
+
+    if use_refs:
+        refs = pick_references(ref_count)
+        images_bytes = _inject_references(images_bytes, refs)
+        base_kwargs.update(_build_ref_kwargs(prompt, refs))
+
+    has_images = bool(images_bytes)
+    combos = []
+    for gs, cfg, tw, iw in itertools.product(gs_list, cfg_list, tw_list, iw_list):
+        params = {"guidance_scale": gs, "cfg_rescale_factor": cfg}
+        if has_images:
+            params["single_edit_guidance_weight"] = tw
+            params["single_edit_guidance_weight_image"] = iw
+        combos.append(params)
+
+    def _call(params: dict):
+        seed = randint(0, 2**31)
+        result = client.generate(
+            prompt=prompt,
+            images=images_bytes,
+            width=2048,
+            height=2048,
+            seed=seed,
+            negative_prompt=negative_prompt,
+            force_single=True,
+            **base_kwargs,
+            **params,
+        )
+        return seed, params, result
+
+    results = []
+    errors = []
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    with ThreadPoolExecutor(max_workers=min(len(combos), 10)) as pool:
+        future_map = {pool.submit(_call, p): p for p in combos}
+        for future in as_completed(future_map):
+            params = future_map[future]
+            try:
+                seed, params, result = future.result()
+                for i, img in enumerate(result.images):
+                    path = os.path.join(OUTPUT_DIR, f"{timestamp}_sweep_s{seed}_{i}.jpg")
+                    with open(path, "wb") as f:
+                        f.write(img)
+                results.append({
+                    "seed": seed,
+                    "params": params,
+                    "_raw_images": result.images,
+                    "images": [
+                        f"data:image/jpeg;base64,{base64.b64encode(img).decode()}"
+                        for img in result.images
+                    ],
+                })
+            except SeedreamAPIError as e:
+                logger.error("Sweep seed=%d error: %s", seed, e)
+                errors.append({"params": params, "error": str(e)})
+            except Exception as e:
+                logger.error("Sweep seed=%d error: %s", seed, e)
+                errors.append({"params": params, "error": str(e)})
+
+    # Step 3: Eval
+    eval_c = EvalClient()
+    good_refs, bad_refs = pick_eval_references()
+
+    for r in results:
+        raw = r.pop("_raw_images", [])
+        if raw:
+            try:
+                ev = eval_c.evaluate(
+                    generated_image=raw[0],
+                    input_data=input_data,
+                    good_refs=good_refs,
+                    bad_refs=bad_refs,
+                )
+                r["eval"] = {
+                    "score": ev.total_score,
+                    "passed": ev.passed,
+                    "dimensions": ev.dimensions,
+                    "issues": ev.issues,
+                }
+            except Exception as e:
+                r["eval"] = {"score": 0, "passed": False, "dimensions": {}, "issues": [str(e)]}
+
+    results.sort(key=lambda r: r.get("eval", {}).get("score", 0), reverse=True)
+
+    return {
+        "total": len(combos),
+        "success": len(results),
+        "failed": len(errors),
+        "prompt": prompt,
+        "results": results,
+        "errors": errors,
+    }
+
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
