@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seedream 4.5 Test UI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { margin-bottom: 20px; font-size: 24px; }
+
+        .form-section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .form-section h2 { font-size: 16px; margin-bottom: 12px; color: #666; }
+
+        label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
+        textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; resize: vertical; font-family: inherit; }
+        input[type="number"], input[type="text"] { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        input[type="file"] { font-size: 14px; }
+
+        .params-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 8px; }
+        .params-grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin-top: 8px; }
+        .param-group { display: flex; flex-direction: column; }
+
+        .checkbox-group { display: flex; align-items: center; gap: 6px; margin-top: 20px; }
+        .checkbox-group input { width: auto; }
+
+        .btn { display: inline-block; padding: 12px 32px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
+        .btn:hover { background: #1d4ed8; }
+        .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+        .btn-group { display: flex; gap: 8px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+        .btn-secondary { display: inline-block; padding: 12px 32px; background: #7c3aed; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .btn-secondary:hover { background: #6d28d9; }
+        .btn-secondary:disabled { background: #94a3b8; cursor: not-allowed; }
+        .btn-sweep { display: inline-block; padding: 12px 32px; background: #059669; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .btn-sweep:hover { background: #047857; }
+        .btn-sweep:disabled { background: #94a3b8; cursor: not-allowed; }
+        .batch-count-input { width: 60px; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; text-align: center; }
+
+        .result-section { background: #fff; border-radius: 8px; padding: 20px; margin-top: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: none; }
+        .result-section.visible { display: block; }
+        .result-meta { font-size: 13px; color: #666; margin-bottom: 12px; word-break: break-all; }
+        .result-meta strong { color: #333; }
+        .result-images { display: flex; flex-wrap: wrap; gap: 12px; }
+        .result-images img { max-width: 100%; border-radius: 6px; border: 1px solid #eee; }
+
+        .batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+        .batch-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
+        .batch-card img { width: 100%; border-radius: 6px; }
+        .card-meta { font-size: 11px; color: #888; margin-top: 6px; word-break: break-all; }
+        .card-params { font-size: 11px; color: #2563eb; background: #eff6ff; border-radius: 4px; padding: 4px 8px; margin-top: 6px; font-family: monospace; }
+        .batch-summary { font-size: 13px; color: #666; margin-bottom: 12px; }
+        .batch-errors { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; }
+
+        .collapsible { cursor: pointer; user-select: none; }
+        .collapsible::before { content: '\25B6 '; font-size: 10px; }
+        .collapsible.open::before { content: '\25BC '; }
+        .collapse-content { display: none; }
+        .collapse-content.open { display: block; }
+
+        .llm-result { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+
+        .loading { text-align: center; padding: 40px; font-size: 16px; color: #666; }
+        .loading::after { content: ''; display: inline-block; width: 20px; height: 20px; border: 3px solid #ddd; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 10px; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; border-radius: 6px; padding: 12px; margin-top: 12px; font-size: 13px; white-space: pre-wrap; }
+
+        .raw-toggle { font-size: 12px; color: #2563eb; cursor: pointer; margin-top: 8px; display: inline-block; }
+        .raw-content { display: none; background: #f1f5f9; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; font-family: monospace; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+        .raw-content.visible { display: block; }
+
+        .hint { font-size: 11px; color: #999; margin-top: 2px; }
+        .combo-count { font-size: 13px; color: #059669; font-weight: 600; margin-left: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Seedream 4.5 Test UI</h1>
+
+        <div class="form-section">
+            <h2>Input</h2>
+            <textarea id="inputJson" style="height:180px; font-family:monospace; font-size:12px;">{
+  "slogan": "Diedriht",
+  "community_type": "host",
+  "slogan_lang": "Spanish",
+  "anchor_info": {
+    "anchor": {
+      "nick_name": "Diedriht🐰Mayorga🇳🇮🇨🇷",
+      "bio_description": "Bienvenidos ami live"
+    },
+    "anchor_characterization": "Diedriht is a Spanish-speaking anchor who hosts highly interactive and informal streams. His content consists of lively, humorous conversations and playful banter with viewers. Visually characterized by use of TikTok face filters like devil horns. Overall vibe is friendly, engaging, and comedic.",
+    "brand_palette": {
+      "primary": {"name": "Black", "hex": "#000000"},
+      "secondary": {"name": "Red", "hex": "#FF0000"},
+      "tertiary": {"name": "White", "hex": "#FFFFFF"}
+    }
+  }
+}</textarea>
+            <div style="margin-top: 8px;">
+                <label for="anchor_photo">Anchor Photo</label>
+                <input type="file" id="anchor_photo" accept="image/*">
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h2 class="collapsible" onclick="toggleCollapse(this)">Options</h2>
+            <div class="collapse-content">
+                <div class="checkbox-group" style="margin-bottom: 12px;">
+                    <input type="checkbox" id="use_refs" checked>
+                    <label for="use_refs" style="margin: 0;">Inject few-shot style references</label>
+                </div>
+                <div id="refsOptions">
+                    <div class="params-grid">
+                        <div class="param-group">
+                            <label for="ref_count">Reference Count</label>
+                            <input type="number" id="ref_count" value="2" min="1" max="3">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h2 class="collapsible" onclick="toggleCollapse(this)">Parameter Sweep</h2>
+            <div class="collapse-content">
+                <p class="hint" style="margin-bottom: 12px;">Comma-separated values. Sweep generates all combinations (cartesian product).</p>
+                <div class="params-grid-4">
+                    <div class="param-group">
+                        <label for="sweep_gs">Guidance Scale</label>
+                        <input type="text" id="sweep_gs" value="8.0">
+                        <span class="hint">[1.0 - 10.0]</span>
+                    </div>
+                    <div class="param-group">
+                        <label for="sweep_cfg">CFG Rescale</label>
+                        <input type="text" id="sweep_cfg" value="0.0">
+                        <span class="hint">[0.0 - 1.0]</span>
+                    </div>
+                    <div class="param-group">
+                        <label for="sweep_tw">Edit Text Weight</label>
+                        <input type="text" id="sweep_tw" value="2.0">
+                        <span class="hint">[1.0 - 10.0]</span>
+                    </div>
+                    <div class="param-group">
+                        <label for="sweep_iw">Edit Image Weight</label>
+                        <input type="text" id="sweep_iw" value="1.0">
+                        <span class="hint">[1.0 - 10.0]</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn" id="generateBtn" onclick="runPipeline(1)">Generate</button>
+            <button class="btn-secondary" id="batchBtn" onclick="runPipeline()">Batch</button>
+            <label style="font-size:13px; color:#555;">Count:</label>
+            <input type="number" class="batch-count-input" id="batchCount" value="10" min="1">
+            <button class="btn-sweep" id="sweepBtn" onclick="runSweep()">Sweep</button>
+        </div>
+
+        <div class="result-section" id="resultSection">
+            <h2>Result</h2>
+            <div id="resultContent"></div>
+        </div>
+    </div>
+
+    <script>
+        function toggleCollapse(el) {
+            el.classList.toggle('open');
+            el.nextElementSibling.classList.toggle('open');
+        }
+
+        function disableAllBtns(disabled) {
+            ['generateBtn', 'batchBtn', 'sweepBtn'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = disabled;
+            });
+        }
+
+        function getInputAndPhoto() {
+            let inputJson;
+            try {
+                inputJson = JSON.parse(document.getElementById('inputJson').value);
+            } catch(e) {
+                alert('Invalid JSON: ' + e.message);
+                return null;
+            }
+            const photoFile = document.getElementById('anchor_photo').files[0];
+            if (!photoFile) {
+                alert('Please upload an anchor photo');
+                return null;
+            }
+            return { inputJson, photoFile };
+        }
+
+        // --- Main pipeline: JSON+photo → prompt → generate → eval ---
+        async function runPipeline(overrideCount) {
+            const section = document.getElementById('resultSection');
+            const content = document.getElementById('resultContent');
+            const count = overrideCount || parseInt(document.getElementById('batchCount').value) || 10;
+
+            const input = getInputAndPhoto();
+            if (!input) return;
+            const { inputJson, photoFile } = input;
+
+            disableAllBtns(true);
+            section.classList.add('visible');
+            const startTime = Date.now();
+            content.innerHTML = `<div class="loading">Generating ${count} images...</div>`;
+            const progressTimer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const min = Math.floor(elapsed / 60);
+                const sec = elapsed % 60;
+                const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
+                content.innerHTML = `<div class="loading">Generating ${count} images... ${timeStr} elapsed</div>`;
+            }, 2000);
+
+            const formData = new FormData();
+            formData.append('input_json', JSON.stringify(inputJson));
+            formData.append('count', count);
+            formData.append('use_refs', document.getElementById('use_refs').checked);
+            formData.append('ref_count', document.getElementById('ref_count').value || '2');
+            formData.append('anchor_photo', photoFile);
+
+            try {
+                const resp = await fetch('/api/pipeline', {
+                    method: 'POST', body: formData,
+                    signal: AbortSignal.timeout(600000),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    content.innerHTML = `<div class="error">${data.error || 'Unknown error'}</div>`;
+                    return;
+                }
+
+                let html = '';
+                html += `<div class="batch-summary"><strong>${data.success}</strong> / ${data.total} generated`;
+                if (data.failed > 0) html += `, <strong style="color:#dc2626">${data.failed} failed</strong>`;
+                html += `</div>`;
+
+                if (data.prompt) {
+                    html += `<span class="collapsible" onclick="toggleCollapse(this)">Generated Prompt</span>`;
+                    html += `<div class="collapse-content"><div class="llm-result">${data.prompt}</div></div>`;
+                }
+
+                if (data.errors && data.errors.length > 0) {
+                    html += `<div class="batch-errors">`;
+                    for (const err of data.errors) html += `Seed ${err.seed}: ${err.error}<br>`;
+                    html += `</div>`;
+                }
+
+                if (data.results && data.results.length > 0) {
+                    html += '<div class="batch-grid">';
+                    for (const r of data.results) {
+                        const ev = r.eval || {};
+                        const scoreColor = ev.score >= 8 ? '#059669' : ev.score >= 6 ? '#b45309' : '#dc2626';
+                        html += `<div class="batch-card">`;
+                        for (const img of r.images) {
+                            html += `<img src="${img}" alt="generated">`;
+                        }
+                        if (ev.score !== undefined) {
+                            html += `<div class="card-params" style="color:${scoreColor}; font-weight:bold;">Score: ${ev.score} ${ev.passed ? 'PASS' : ''}</div>`;
+                        }
+                        html += `<div class="card-meta">Seed: ${r.seed}</div>`;
+                        if (ev.dimensions) {
+                            html += `<span class="collapsible" onclick="toggleCollapse(this)" style="font-size:11px;">Eval</span>`;
+                            html += `<div class="collapse-content"><div class="llm-result" style="font-size:10px;">`;
+                            html += Object.entries(ev.dimensions).map(([k,v]) => `${k}: ${v}`).join('\n');
+                            if (ev.issues && ev.issues.length) html += `\nIssues: ${ev.issues.join(', ')}`;
+                            html += `</div></div>`;
+                        }
+                        html += `</div>`;
+                    }
+                    html += '</div>';
+                }
+
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
+            } finally {
+                clearInterval(progressTimer);
+                disableAllBtns(false);
+            }
+        }
+
+        // --- Sweep: param arrays → cartesian product → generate → eval ---
+        async function runSweep() {
+            const input = getInputAndPhoto();
+            if (!input) return;
+            const { inputJson, photoFile } = input;
+
+            const section = document.getElementById('resultSection');
+            const content = document.getElementById('resultContent');
+
+            disableAllBtns(true);
+            section.classList.add('visible');
+            const startTime = Date.now();
+            content.innerHTML = '<div class="loading">Sweep: building prompt + generating...</div>';
+            const progressTimer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const min = Math.floor(elapsed / 60);
+                const sec = elapsed % 60;
+                const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
+                content.innerHTML = `<div class="loading">Sweep... ${timeStr} elapsed</div>`;
+            }, 2000);
+
+            const formData = new FormData();
+            formData.append('input_json', JSON.stringify(inputJson));
+            formData.append('anchor_photo', photoFile);
+            formData.append('use_refs', document.getElementById('use_refs').checked);
+            formData.append('ref_count', document.getElementById('ref_count').value || '2');
+            formData.append('guidance_scales', document.getElementById('sweep_gs').value);
+            formData.append('cfg_rescale_factors', document.getElementById('sweep_cfg').value);
+            formData.append('edit_text_weights', document.getElementById('sweep_tw').value);
+            formData.append('edit_image_weights', document.getElementById('sweep_iw').value);
+
+            try {
+                const resp = await fetch('/api/pipeline_sweep', {
+                    method: 'POST', body: formData,
+                    signal: AbortSignal.timeout(600000),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    content.innerHTML = `<div class="error">${data.error || 'Unknown error'}</div>`;
+                    return;
+                }
+
+                let html = '';
+                html += `<div class="batch-summary"><strong>${data.success}</strong> / ${data.total} generated`;
+                if (data.failed > 0) html += `, <strong style="color:#dc2626">${data.failed} failed</strong>`;
+                html += `</div>`;
+
+                if (data.prompt) {
+                    html += `<span class="collapsible" onclick="toggleCollapse(this)">Generated Prompt</span>`;
+                    html += `<div class="collapse-content"><div class="llm-result">${data.prompt}</div></div>`;
+                }
+
+                if (data.results && data.results.length > 0) {
+                    html += '<div class="batch-grid">';
+                    for (const r of data.results) {
+                        const ev = r.eval || {};
+                        const scoreColor = ev.score >= 8 ? '#059669' : ev.score >= 6 ? '#b45309' : '#dc2626';
+                        html += `<div class="batch-card">`;
+                        for (const img of r.images) html += `<img src="${img}" alt="generated">`;
+                        if (r.params) {
+                            const parts = Object.entries(r.params).map(([k,v]) => `${k.replace('single_edit_guidance_','').replace('_factor','')}=${v}`);
+                            html += `<div class="card-params">${parts.join(' | ')}</div>`;
+                        }
+                        if (ev.score !== undefined) {
+                            html += `<div class="card-params" style="color:${scoreColor}; font-weight:bold;">Score: ${ev.score} ${ev.passed ? 'PASS' : ''}</div>`;
+                        }
+                        html += `<div class="card-meta">Seed: ${r.seed}</div>`;
+                        if (ev.dimensions) {
+                            html += `<span class="collapsible" onclick="toggleCollapse(this)" style="font-size:11px;">Eval</span>`;
+                            html += `<div class="collapse-content"><div class="llm-result" style="font-size:10px;">`;
+                            html += Object.entries(ev.dimensions).map(([k,v]) => `${k}: ${v}`).join('\n');
+                            if (ev.issues && ev.issues.length) html += `\nIssues: ${ev.issues.join(', ')}`;
+                            html += `</div></div>`;
+                        }
+                        html += `</div>`;
+                    }
+                    html += '</div>';
+                }
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
+            } finally {
+                clearInterval(progressTimer);
+                disableAllBtns(false);
+            }
+        }
+    </script>
+</body>
+</html>

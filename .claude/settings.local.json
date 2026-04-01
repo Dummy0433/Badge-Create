@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init:*)",
+      "Bash(pip install:*)",
+      "Bash(python3 -m pip install -r /Users/bytedance/Documents/Projects/Badge_Create/requirements.txt)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(pytest:*)",
+      "Bash(git rm:*)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/8.png /Users/bytedance/Documents/Projects/Badge_Create/references/ref_01_gelik.png)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/9.png /Users/bytedance/Documents/Projects/Badge_Create/references/ref_02_hikachuu.png)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/10.png /Users/bytedance/Documents/Projects/Badge_Create/references/ref_03_makimaki.png)",
+      "Bash(gh repo:*)",
+      "Bash(pip3 install:*)",
+      "Bash(git push:*)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/14.png /Users/bytedance/Documents/Projects/Badge_Create/eval_references/good_01.png)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/15.png /Users/bytedance/Documents/Projects/Badge_Create/eval_references/good_02.png)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/17.png /Users/bytedance/Documents/Projects/Badge_Create/eval_references/good_03.png)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/21.png /Users/bytedance/Documents/Projects/Badge_Create/eval_references/bad_01.png)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/22.png /Users/bytedance/Documents/Projects/Badge_Create/eval_references/bad_02.png)",
+      "Bash(cp /Users/bytedance/.claude/image-cache/a4776f31-2378-44db-ae7a-42fe8a3442a8/23.png /Users/bytedance/Documents/Projects/Badge_Create/eval_references/bad_03.png)",
+      "Bash(grep:*)",
+      "Bash(pip show:*)"
+    ]
+  }
+}

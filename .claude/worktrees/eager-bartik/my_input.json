@@ -1,0 +1,30 @@
+{
+  "slogan": "Diedriht",
+  "community_type": "host",
+  "slogan_lang": "Spanish",
+  "app_language": "es",
+  "frequent_lang": "es",
+  "anchor_photo": "test_photo.jpg",
+  "anchor_info": {
+    "anchor": {
+      "nick_name": "Diedriht🐰Mayorga🇳🇮🇨🇷",
+      "bio_description": "Bienvenidos ami live",
+      "fans_club_name": ""
+    },
+    "anchor_characterization": "Diedriht is a Spanish-speaking anchor who hosts highly interactive and informal streams from a casual home setting. His content consists of lively, humorous conversations and playful banter with his viewers, fostering a strong and familiar community atmosphere. Visually, his streams are characterized by the consistent use of various TikTok face filters, such as devil horns or anime styles, which have become part of his online persona. The overall vibe is friendly, engaging, and comedic, with a clear focus on building a close-knit relationship with his audience.",
+    "brand_palette": {
+      "primary": {
+        "name": "Black",
+        "hex": "#000000"
+      },
+      "secondary": {
+        "name": "Red",
+        "hex": "#FF0000"
+      },
+      "tertiary": {
+        "name": "White",
+        "hex": "#FFFFFF"
+      }
+    }
+  }
+}
