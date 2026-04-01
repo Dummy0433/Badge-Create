@@ -96,7 +96,7 @@ class EvalClient:
                 {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
-            max_tokens=1000,
+            max_completion_tokens=1000,
         )
 
         return self._parse_response(response)

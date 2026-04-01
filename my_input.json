@@ -1,0 +1,10 @@
+{
+  "text_output": "Wells",
+  "anchor_photo": "test_photo.jpg",
+  "anchor_characterization": "This Jordanian anchor hosts an energetic and highly interactive 'Just Chatting' stream. He engages directly with his audience, responding to song requests, comments, and playful banter with quick-witted humor. Visually, he presents a casual style, frequently seen in a signature blue hoodie.",
+  "brand_palette": {
+    "primary": {"name": "Gold", "hex": "#D4AF37"},
+    "secondary": {"name": "Vibrant Blue", "hex": "#007BFF"},
+    "tertiary": {"name": "Black", "hex": "#000000"}
+  }
+}

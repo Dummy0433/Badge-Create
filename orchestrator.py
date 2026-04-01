@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 
 from eval_client import EvalClient, EvalResult
 from eval_store import pick_eval_references
-from prompt_builder import build_prompt, build_negative_prompt
+from prompt_builder import (
+    analyze_photo, assemble_keywords, expand_prompt,
+    validate_prompt, build_negative_prompt, PromptValidationError,
+)
 from seedream_sdk import SeedreamClient, SeedreamAPIError
 
 load_dotenv()
@@ -80,8 +83,31 @@ class Orchestrator:
         self.adj_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def run(self, input_data: dict) -> OrchestrationResult:
-        """Full pipeline: build prompt → generate → eval → retry/reroll."""
-        original_prompt = build_prompt(input_data)
+        """Full pipeline: photo analysis → keywords → prompt → generate → eval → retry/reroll."""
+
+        # Step 1: Analyze photo if photo_analysis not provided
+        if not input_data.get("photo_analysis"):
+            anchor_photo = input_data.get("anchor_photo", "")
+            if not anchor_photo:
+                raise PromptValidationError("Neither photo_analysis nor anchor_photo provided")
+            # Load photo bytes
+            if os.path.isfile(anchor_photo):
+                with open(anchor_photo, "rb") as f:
+                    photo_bytes = f.read()
+            else:
+                import base64 as b64mod
+                photo_bytes = b64mod.b64decode(anchor_photo)
+            input_data["photo_analysis"] = analyze_photo(self.adj_client, photo_bytes)
+            logger.info("Photo analysis complete: %s", input_data["photo_analysis"])
+
+        # Step 2-3: Assemble keywords → expand into prompt
+        keywords = assemble_keywords(self.adj_client, input_data)
+        original_prompt = expand_prompt(self.adj_client, keywords)
+
+        # Step 4: Validate
+        validate_prompt(original_prompt, input_data)
+        logger.info("Prompt validated. Starting generation loop.")
+
         negative_prompt = build_negative_prompt()
 
         all_images: list[bytes] = []
@@ -216,7 +242,7 @@ class Orchestrator:
                     f"Return the adjusted prompt:"
                 )},
             ],
-            max_tokens=2000,
+            max_completion_tokens=2000,
         )
         adjusted = response.choices[0].message.content.strip()
         logger.info("Prompt adjusted: %s", adjusted[:200])
@@ -234,7 +260,7 @@ class Orchestrator:
                     f"Return ONLY the prompt text:"
                 )},
             ],
-            max_tokens=2000,
+            max_completion_tokens=2000,
         )
         rerolled = response.choices[0].message.content.strip()
         logger.info("Prompt rerolled: %s", rerolled[:200])

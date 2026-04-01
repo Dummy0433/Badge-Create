@@ -1,4 +1,5 @@
 # tests/test_prompt_builder.py
+from unittest.mock import patch
 import pytest
 from prompt_builder import build_prompt, build_negative_prompt, PromptValidationError
 
@@ -27,44 +28,45 @@ SAMPLE_INPUT = {
 }
 
 
+@patch("prompt_builder._get_client", return_value=None)
 class TestBuildPrompt:
-    def test_contains_fixed_style(self):
+    def test_contains_fixed_style(self, _mock):
         prompt = build_prompt(SAMPLE_INPUT)
         assert "C4D Badge" in prompt
         assert "3D Pixar realistic cartoon style" in prompt
         assert "candy color palette" in prompt
 
-    def test_contains_text_output(self):
+    def test_contains_text_output(self, _mock):
         prompt = build_prompt(SAMPLE_INPUT)
         assert '"Wells"' in prompt
 
-    def test_contains_brand_colors(self):
+    def test_contains_brand_colors(self, _mock):
         prompt = build_prompt(SAMPLE_INPUT)
         assert "Gold" in prompt or "#D4AF37" in prompt
         assert "#000000" in prompt or "Black" in prompt
 
-    def test_contains_character_traits(self):
+    def test_contains_character_traits(self, _mock):
         prompt = build_prompt(SAMPLE_INPUT)
         assert "dark black side-parted short hair" in prompt
         assert "deep brown eyes" in prompt
         assert "gentle smile" in prompt
 
-    def test_contains_lighting(self):
+    def test_contains_lighting(self, _mock):
         prompt = build_prompt(SAMPLE_INPUT)
         assert "Warm side light from left" in prompt
 
-    def test_missing_text_output_raises(self):
+    def test_missing_text_output_raises(self, _mock):
         bad_input = {**SAMPLE_INPUT, "text_output": ""}
         with pytest.raises(PromptValidationError, match="text_output"):
             build_prompt(bad_input)
 
-    def test_missing_photo_analysis_raises(self):
+    def test_missing_photo_analysis_raises(self, _mock):
         bad_input = {**SAMPLE_INPUT}
         del bad_input["photo_analysis"]
         with pytest.raises(PromptValidationError, match="photo_analysis"):
             build_prompt(bad_input)
 
-    def test_missing_brand_palette_raises(self):
+    def test_missing_brand_palette_raises(self, _mock):
         bad_input = {**SAMPLE_INPUT}
         del bad_input["brand_palette"]
         with pytest.raises(PromptValidationError, match="brand_palette"):
