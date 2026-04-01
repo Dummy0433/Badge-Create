@@ -216,13 +216,27 @@ def validate_prompt(prompt: str, input_data: dict) -> None:
         raise PromptValidationError("Missing heart carrier description")
 
 
-def build_prompt(input_data: dict) -> str:
-    """Full pipeline: analyze photo (if needed) → keywords → expand → validate.
+def validate_keywords(keywords: dict) -> None:
+    """Validate assembled keywords JSON has all required fields.
 
-    For backward compatibility, also works without an OpenAI client if
-    photo_analysis is already provided — falls back to template mode.
+    Raises PromptValidationError if critical fields are missing.
     """
-    # Validate minimum required fields
+    required_top = ["character", "heart_carrier", "text"]
+    for key in required_top:
+        if key not in keywords:
+            raise PromptValidationError(f"Missing required keyword section: {key}")
+
+    text_content = keywords.get("text", {}).get("content", "").strip()
+    if not text_content:
+        raise PromptValidationError("text.content is empty in assembled keywords")
+
+
+def build_prompt(input_data: dict, client: openai.OpenAI | None = None) -> tuple[dict, str]:
+    """Full pipeline: assemble keywords -> validate -> expand -> validate prompt.
+
+    Returns (keywords, prompt) so caller can re-expand from keywords on retry.
+    Falls back to template mode if no client provided and no env key.
+    """
     text_output = input_data.get("text_output", "").strip()
     if not text_output:
         raise PromptValidationError("text_output is empty or missing")
@@ -233,16 +247,24 @@ def build_prompt(input_data: dict) -> str:
     if not input_data.get("brand_palette"):
         raise PromptValidationError("brand_palette is missing")
 
-    # Use LLM pipeline if client available, otherwise fallback to template
-    client = _get_client()
-    if client:
-        keywords = assemble_keywords(client, input_data)
-        prompt = expand_prompt(client, keywords)
+    llm = client or _get_client()
+    if llm:
+        keywords = assemble_keywords(llm, input_data)
+        validate_keywords(keywords)
+        prompt = expand_prompt(llm, keywords)
         validate_prompt(prompt, input_data)
-        return prompt
+        return keywords, prompt
 
-    # Fallback: simple template (for tests without OpenAI key)
-    return _template_fallback(input_data)
+    # Fallback: template mode (for tests without OpenAI key)
+    keywords = {
+        "character": input_data.get("photo_analysis", {}),
+        "heart_carrier": {
+            "color_name": input_data["brand_palette"]["primary"]["name"],
+            "color_hex": input_data["brand_palette"]["primary"]["hex"],
+        },
+        "text": {"content": text_output},
+    }
+    return keywords, _template_fallback(input_data)
 
 
 def build_negative_prompt() -> str:
