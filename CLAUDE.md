@@ -19,25 +19,67 @@ python3 run_orchestrator.py                    # Run orchestration pipeline with
 python3 run_orchestrator.py input.json         # Run with custom input JSON
 ```
 
+## Product Features
+
+Three modes share ONE pipeline: `JSON + Photo → LLM prompt build → Seedream generate → GPT eval`
+
+| Mode | What it does | Use case |
+|------|-------------|----------|
+| **Generate** | 1 image, fixed params (gs=8, cfg=0, tw=2, iw=1) + eval | Quick single test |
+| **Batch** | N images (default 10), fixed params, different seeds + eval all, sort by score | Production: pick best from N |
+| **Sweep** | Cartesian product of param arrays (guidance_scale, cfg, text/image weight), each with random seed + eval | Find optimal "magic number" parameters |
+
+All three:
+1. Accept the same input: datamining JSON + anchor photo
+2. Auto build prompt: GPT-5.4 photo analysis → keyword assembly → prompt expansion
+3. Pass anchor photo + few-shot reference images to Seedream
+4. Eval every generated image with GPT-5.4 (7 dimensions, weighted scoring)
+5. Return results sorted by eval score
+
 ## Architecture
 
-Three layers, single-directory structure:
+```
+Input (JSON + Photo)
+    ↓
+prompt_builder.py  →  GPT-5.4: analyze_photo → assemble_keywords → expand_prompt → validate
+    ↓
+server.py pipeline  →  Seedream SDK: batch generate N images (photo + fewshot refs as input)
+    ↓
+eval_client.py  →  GPT-5.4: score each image on 7 dimensions → sort by score
+    ↓
+Frontend: display ranked results with eval scores
+```
 
-- **`seedream_sdk.py`** — `SeedreamClient` wraps the Seedream HTTP multipart API. Returns `SeedreamResponse` (images as bytes, llm_result, request_id). Raises `SeedreamAPIError` on non-zero status_code.
-- **`server.py`** — FastAPI with `POST /api/generate` (single) and `POST /api/generate_batch` (concurrent via ThreadPoolExecutor, max 10 workers). Saves images to `output/`, returns base64 data URIs.
-- **`static/index.html`** — Single-page vanilla HTML/CSS/JS. No frameworks. Supports single and batch generation with grid display.
+### Modules
 
-Data flow: Frontend FormData -> FastAPI -> SeedreamClient.generate() -> HTTP multipart POST to Seedream API -> parse afr_data[].pic (base64 JPEG) + afr_data[].pic_conf (JSON metadata) -> base64 data URI back to frontend.
+- **`seedream_sdk.py`** — `SeedreamClient` wraps Seedream HTTP multipart API. Optimal params: gs=8, cfg=0, tw=2, iw=1, cot_mode="enable".
+- **`prompt_builder.py`** — 3-step LLM prompt pipeline: `analyze_photo()` (GPT vision → extract appearance), `assemble_keywords()` (map JSON fields → badge elements, smart color assignment), `expand_prompt()` (keywords → final Seedream prompt with fixed structure constraints). Template fallback for tests.
+- **`eval_client.py`** — GPT-5.4 vision eval. 7 dimensions (heart_carrier, character, decorations, text_render, color_match, composition, quality). Weighted scoring: text_render=0.5 weight (diffusion models struggle with text), others=1.0. Pass threshold: weighted avg >= 8.0.
+- **`eval_store.py`** — Good/bad reference images for eval (3 good, 3 bad, hardcoded → future DB). Objective descriptions: structure proportions, subject occupancy %, text position, color saturation, quality.
+- **`reference_store.py`** — Few-shot style reference images injected into Seedream for style guidance (3 refs, hardcoded → future DB).
+- **`orchestrator.py`** — `preprocess_input()` maps datamining nested format to internal flat format. Also contains CLI retry/reroll logic (legacy, not used by server pipeline).
+- **`server.py`** — FastAPI endpoints: `/api/pipeline` (main: JSON+photo → prompt → batch → eval → ranked), `/api/generate` (single), `/api/generate_batch` (batch), `/api/generate_sweep` (param sweep), `/api/build_prompt` (prompt only).
+- **`static/index.html`** — Single-page vanilla HTML/CSS/JS. JSON input + photo upload + Generate button → results grid sorted by eval score.
 
-### Eval & Orchestration Pipeline
+### Input Format (datamining)
 
-- **`prompt_builder.py`** — Template-based prompt assembly. Fixed segments (render style, lighting, composition) + variable slots filled from datamining JSON (brand_palette, photo_analysis, anchor_characterization, text_output). Pre-check validates all required fields present.
-- **`eval_store.py`** — Good/bad reference image library for eval (hardcoded now, DB later). Same pattern as `reference_store.py`.
-- **`eval_client.py`** — GPT-5.4 vision eval. Sends generated image + good/bad refs + criteria to GPT-5.4, returns structured scores on 7 dimensions: heart_carrier, character, decorations, text_render, color_match, composition, quality. Pass threshold: average >= 8.0.
-- **`orchestrator.py`** — Full pipeline: `build_prompt()` -> Seedream generate -> eval -> retry (max 2, adjust prompt targeting failing dimensions, always from original prompt) -> reroll (max 1, LLM rewrites prompt from scratch) -> return best image.
-- **`run_orchestrator.py`** — CLI entry point. Uses sample input or custom JSON file.
+```json
+{
+  "slogan": "Name",
+  "anchor_photo": "path or uploaded",
+  "anchor_info": {
+    "anchor": { "nick_name": "...", "bio_description": "..." },
+    "anchor_characterization": "...",
+    "brand_palette": {
+      "primary": {"name": "...", "hex": "#..."},
+      "secondary": {"name": "...", "hex": "#..."},
+      "tertiary": {"name": "...", "hex": "#..."}
+    }
+  }
+}
+```
 
-Pipeline flow: `Input JSON -> prompt_builder -> [generate -> eval -> adjust?] x3 -> [reroll -> generate -> eval] x1 -> best result`
+`preprocess_input()` flattens this to: `text_output`, `anchor_characterization`, `brand_palette`, `anchor_nickname`, `anchor_bio`.
 
 ## Seedream 4.5 API Reference
 
