@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seedream 4.5 Test UI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { margin-bottom: 20px; font-size: 24px; }
+
+        .form-section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .form-section h2 { font-size: 16px; margin-bottom: 12px; color: #666; }
+
+        label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
+        textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; resize: vertical; font-family: inherit; }
+        input[type="number"], input[type="text"] { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        input[type="file"] { font-size: 14px; }
+
+        .params-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 8px; }
+        .param-group { display: flex; flex-direction: column; }
+
+        .checkbox-group { display: flex; align-items: center; gap: 6px; margin-top: 20px; }
+        .checkbox-group input { width: auto; }
+
+        .btn { display: inline-block; padding: 12px 32px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
+        .btn:hover { background: #1d4ed8; }
+        .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+
+        .result-section { background: #fff; border-radius: 8px; padding: 20px; margin-top: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: none; }
+        .result-section.visible { display: block; }
+        .result-meta { font-size: 13px; color: #666; margin-bottom: 12px; word-break: break-all; }
+        .result-meta strong { color: #333; }
+        .result-images { display: flex; flex-wrap: wrap; gap: 12px; }
+        .result-images img { max-width: 100%; border-radius: 6px; border: 1px solid #eee; }
+
+        .llm-result { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 12px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+
+        .loading { text-align: center; padding: 40px; font-size: 16px; color: #666; }
+        .loading::after { content: ''; display: inline-block; width: 20px; height: 20px; border: 3px solid #ddd; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 10px; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; border-radius: 6px; padding: 12px; margin-top: 12px; font-size: 13px; white-space: pre-wrap; }
+
+        .raw-toggle { font-size: 12px; color: #2563eb; cursor: pointer; margin-top: 8px; display: inline-block; }
+        .raw-content { display: none; background: #f1f5f9; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; font-family: monospace; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+        .raw-content.visible { display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Seedream 4.5 Test UI</h1>
+
+        <div class="form-section">
+            <h2>Prompt</h2>
+            <textarea id="prompt" placeholder="Enter your prompt here..."></textarea>
+        </div>
+
+        <div class="form-section">
+            <h2>Parameters</h2>
+            <div class="params-grid">
+                <div class="param-group">
+                    <label for="width">Width</label>
+                    <input type="number" id="width" value="2048" min="256" max="4096">
+                </div>
+                <div class="param-group">
+                    <label for="height">Height</label>
+                    <input type="number" id="height" value="2048" min="256" max="4096">
+                </div>
+                <div class="param-group">
+                    <label for="seed">Seed (-1 = random)</label>
+                    <input type="number" id="seed" value="-1">
+                </div>
+            </div>
+            <div class="params-grid" style="margin-top: 12px;">
+                <div class="param-group" style="grid-column: span 2;">
+                    <label for="negative_prompt">Negative Prompt</label>
+                    <input type="text" id="negative_prompt" value="nsfw">
+                </div>
+                <div class="param-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="force_single" checked>
+                        <label for="force_single" style="margin: 0;">Force Single</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h2>Reference Images (optional)</h2>
+            <input type="file" id="ref_images" multiple accept="image/*">
+        </div>
+
+        <button class="btn" id="generateBtn" onclick="generate()">Generate</button>
+
+        <div class="result-section" id="resultSection">
+            <h2>Result</h2>
+            <div id="resultContent"></div>
+        </div>
+    </div>
+
+    <script>
+        async function generate() {
+            const btn = document.getElementById('generateBtn');
+            const section = document.getElementById('resultSection');
+            const content = document.getElementById('resultContent');
+            const prompt = document.getElementById('prompt').value.trim();
+
+            if (!prompt) {
+                alert('Please enter a prompt');
+                return;
+            }
+
+            btn.disabled = true;
+            section.classList.add('visible');
+            content.innerHTML = '<div class="loading">Generating...</div>';
+
+            const formData = new FormData();
+            formData.append('prompt', prompt);
+            formData.append('width', document.getElementById('width').value);
+            formData.append('height', document.getElementById('height').value);
+            formData.append('seed', document.getElementById('seed').value);
+            formData.append('negative_prompt', document.getElementById('negative_prompt').value);
+            formData.append('force_single', document.getElementById('force_single').checked);
+
+            const fileInput = document.getElementById('ref_images');
+            for (const file of fileInput.files) {
+                formData.append('files', file);
+            }
+
+            try {
+                const resp = await fetch('/api/generate', { method: 'POST', body: formData });
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    content.innerHTML = `<div class="error">${data.error || 'Unknown error'}\n\n${JSON.stringify(data.raw_response || {}, null, 2)}</div>`;
+                    return;
+                }
+
+                let html = '';
+                html += `<div class="result-meta"><strong>Request ID:</strong> ${data.request_id}</div>`;
+
+                if (data.images && data.images.length > 0) {
+                    html += '<div class="result-images">';
+                    for (const img of data.images) {
+                        html += `<img src="${img}" alt="Generated image">`;
+                    }
+                    html += '</div>';
+                } else {
+                    html += '<div class="error">No images returned</div>';
+                }
+
+                if (data.llm_result) {
+                    html += `<div class="result-meta" style="margin-top:12px;"><strong>PE Rewrite:</strong></div>`;
+                    html += `<div class="llm-result">${data.llm_result}</div>`;
+                }
+
+                if (data.image_prompts && data.image_prompts.length > 0) {
+                    html += `<div class="result-meta" style="margin-top:12px;"><strong>Image Prompts:</strong></div>`;
+                    html += `<div class="llm-result">${data.image_prompts.join('\n\n')}</div>`;
+                }
+
+                html += `<span class="raw-toggle" onclick="toggleRaw()">Show raw response</span>`;
+                html += `<div class="raw-content" id="rawContent">${JSON.stringify(data.raw_response || {}, null, 2)}</div>`;
+
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function toggleRaw() {
+            document.getElementById('rawContent').classList.toggle('visible');
+        }
+    </script>
+</body>
+</html>
