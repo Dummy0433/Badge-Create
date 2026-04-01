@@ -1,7 +1,9 @@
 # tests/test_seedream_sdk.py
+import base64
 import json
 from unittest.mock import patch, MagicMock
 import pytest
+import requests as requests_lib
 from seedream_sdk import SeedreamClient, SeedreamResponse, SeedreamAPIError
 
 
@@ -111,9 +113,44 @@ class TestSeedreamClientErrors:
     def test_http_error_raises(self, mock_post):
         resp = MagicMock()
         resp.status_code = 500
-        resp.raise_for_status.side_effect = Exception("Internal Server Error")
+        resp.raise_for_status.side_effect = requests_lib.exceptions.HTTPError("500 Server Error")
         mock_post.return_value = resp
         client = SeedreamClient()
 
-        with pytest.raises(Exception):
+        with pytest.raises(requests_lib.exceptions.HTTPError):
             client.generate(prompt="test")
+
+
+class TestSeedreamClientResponseParsing:
+
+    @patch("seedream_sdk.requests.post")
+    def test_parse_response_success(self, mock_post):
+        """Test that response parsing correctly extracts images, llm_result, and request_id."""
+        fake_image = b"\xff\xd8\xff\xe0fake-jpeg"
+        encoded_image = base64.b64encode(fake_image).decode()
+
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "status_code": 0,
+            "data": {
+                "afr_data": [encoded_image],
+                "resp_json": json.dumps({
+                    "llm_result": "A cute orange cat",
+                    "image_prompt": ["detailed cat prompt"],
+                    "request_id": "req-456",
+                }),
+                "binary_data": [],
+            },
+            "extra": {"log_id": "log-abc"},
+        }
+        mock_post.return_value = resp
+
+        client = SeedreamClient()
+        result = client.generate(prompt="a cute cat")
+
+        assert len(result.images) == 1
+        assert result.images[0] == fake_image
+        assert result.llm_result == "A cute orange cat"
+        assert result.image_prompts == ["detailed cat prompt"]
+        assert result.request_id == "req-456"
