@@ -214,7 +214,7 @@ class Orchestrator:
             "guidance_scale": 8.0,
             "cfg_rescale_factor": 0.0,
             "single_edit_guidance_weight": 2.0,
-            "single_edit_guidance_weight_image": 1.0,
+            "single_edit_guidance_weight_image": 2.5,
         }
         if extra_gen_kwargs:
             gen_kwargs.update(extra_gen_kwargs)

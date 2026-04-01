@@ -48,8 +48,9 @@ Rules:
 - Character clothing comes from anchor_characterization (their signature style), \
 NOT from the photo. If no specific clothing mentioned, use a casual style that \
 matches the anchor's personality.
-- Decorations are derived from anchor's personality, interests, and stream themes. \
-Include the anchor's emoji or mascot if present in their nickname.
+- Decorations: pick 1-2 simple icons from the anchor's personality. Keep them \
+minimal — single-color outline/doodle style. Do NOT use complex 3D objects or \
+multi-colored elements. Less is more.
 - text_output is used EXACTLY as-is for the badge text — do not translate or modify.
 
 COLOR ASSIGNMENT — do NOT mechanically map primary=heart. Instead:
@@ -76,7 +77,7 @@ Return ONLY valid JSON:
     "material": "soft candy or jelly, smooth glossy surface"
   },
   "decorations": {
-    "elements": ["<3-5 small icons/doodles derived from anchor personality>"]
+    "elements": ["<1-2 simple single-color doodle icons>"]
   },
   "text": {
     "content": "<text_output EXACTLY as provided>",
@@ -106,7 +107,8 @@ the heart, partially extending beyond the heart edge"
 VARIABLE elements from keywords:
 - Heart gradient color (from heart_carrier)
 - Character appearance + clothing (from character)
-- Decorations (from decorations.elements)
+- Decorations (from decorations.elements) — describe as small, simple, \
+single-color outline doodles FLOATING NEAR the heart, NOT attached to it
 - Text content in EXACT quotes (from text.content — do NOT change the text)
 - Background color (from background_color)
 
@@ -271,7 +273,8 @@ def build_negative_prompt() -> str:
     """Return the fixed negative prompt for badge generation."""
     return (
         "nsfw, balloon, inflatable, wrinkles, seams, strings, rope, "
-        "flat, 2D, thin, metal frame, hard border, badge pin, deflated"
+        "flat, 2D, thin, metal frame, hard border, badge pin, deflated, "
+        "white background, light background, gradient background"
     )
 
 
