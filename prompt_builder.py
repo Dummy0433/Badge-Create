@@ -46,11 +46,20 @@ produce a structured keyword JSON that maps each input field to badge elements.
 
 Rules:
 - Character clothing comes from anchor_characterization (their signature style), \
-NOT from the photo
-- Heart color uses brand_palette.primary
-- Background uses brand_palette.tertiary
-- Decorations are derived from anchor's personality, interests, and stream themes
-- text_output is used exactly as-is for the badge text
+NOT from the photo. If no specific clothing mentioned, use a casual style that \
+matches the anchor's personality.
+- Decorations are derived from anchor's personality, interests, and stream themes. \
+Include the anchor's emoji or mascot if present in their nickname.
+- text_output is used EXACTLY as-is for the badge text — do not translate or modify.
+
+COLOR ASSIGNMENT — do NOT mechanically map primary=heart. Instead:
+- Look at ALL three palette colors and assign them for maximum visual impact.
+- The heart carrier should use the most VIBRANT, eye-catching color from the palette.
+- Background should provide strong CONTRAST with the heart.
+- If primary is a dark/neutral color (black, grey, white), use secondary or tertiary \
+for the heart instead.
+- Text accents should complement the heart color.
+- Overall palette should feel vibrant, high-saturation, and visually appealing.
 
 Return ONLY valid JSON:
 {
@@ -59,21 +68,21 @@ Return ONLY valid JSON:
     "hair": "<from photo_analysis>",
     "eyes": "<from photo_analysis>",
     "expression": "<from photo_analysis>",
-    "clothing": "<derived from anchor_characterization signature style>"
+    "clothing": "<derived from anchor_characterization>"
   },
   "heart_carrier": {
-    "color_name": "<brand_palette.primary.name>",
-    "color_hex": "<brand_palette.primary.hex>",
+    "color_name": "<chosen vibrant color name>",
+    "color_hex": "<hex>",
     "material": "soft candy or jelly, smooth glossy surface"
   },
   "decorations": {
-    "elements": ["<3-5 small icons/doodles derived from anchor personality and themes>"]
+    "elements": ["<3-5 small icons/doodles derived from anchor personality>"]
   },
   "text": {
-    "content": "<text_output exactly>",
-    "color_tint": "<brand_palette.primary.hex>"
+    "content": "<text_output EXACTLY as provided>",
+    "color_tint": "<complementary color hex>"
   },
-  "background_color": "<brand_palette.tertiary.hex>"
+  "background_color": "<contrasting color hex>"
 }"""
 
 PROMPT_EXPANSION_PROMPT = """\
@@ -81,28 +90,30 @@ You are a prompt engineer writing image generation prompts for Seedream 4.5.
 
 Given structured keywords, expand them into a single detailed paragraph prompt.
 
-FIXED elements you MUST include exactly:
+FIXED structure you MUST include:
 - Start with: "C4D Badge, 3D Pixar realistic cartoon style."
-- Heart description: "A large plump rounded solid 3D heart shape as the background \
-carrier, the heart is thick and voluminous like soft candy or jelly, smooth glossy surface"
-- Heart must NOT be a balloon: "NOT a balloon NOT inflatable, no wrinkles no seams no strings"
-- Character positioning: "positioned in front of the upper area of the heart from \
-chest up, occupying 70% of the heart"
-- Text style: "3D bold thick retro cursive gradient text" with "silver chrome sweep \
-light effect, holographic iridescent metallic material"
-- Text position: "at the bottom of the heart, partially extending beyond the heart edge"
+- Heart: "A large plump rounded solid 3D heart shape as the background carrier, \
+the heart is thick and voluminous like soft candy or jelly, smooth glossy surface"
+- Anti-balloon: "NOT a balloon NOT inflatable, no wrinkles no seams no strings"
+- Character: "positioned in front of the upper area of the heart from chest up, \
+occupying 70% of the heart"
+- Text: "3D bold thick retro cursive gradient text" with "silver chrome sweep \
+light effect, holographic iridescent metallic material" and "at the bottom of \
+the heart, partially extending beyond the heart edge"
 - Lighting: "Warm side light from left, cool side light from right, soft front key light"
-- End with: "candy color palette, commercial art illustration style"
+- End with: "vibrant high-saturation color palette, commercial art illustration style"
 
-VARIABLE elements to fill from the keywords:
-- Heart gradient color (from heart_carrier.color_name)
-- Character appearance (from character.*)
-- Character clothing (from character.clothing)
+VARIABLE elements from keywords:
+- Heart gradient color (from heart_carrier)
+- Character appearance + clothing (from character)
 - Decorations (from decorations.elements)
-- Text content in quotes (from text.content)
+- Text content in EXACT quotes (from text.content — do NOT change the text)
 - Background color (from background_color)
 
-Return ONLY the prompt text, nothing else. One single paragraph."""
+IMPORTANT: The text.content value must appear EXACTLY in the prompt wrapped in \
+double quotes. Do not translate, modify, or paraphrase it.
+
+Return ONLY the prompt text. One single paragraph."""
 
 
 def analyze_photo(client: openai.OpenAI, image_bytes: bytes) -> dict:
@@ -134,12 +145,14 @@ def assemble_keywords(client: openai.OpenAI, input_data: dict) -> dict:
     """Step 2: LLM reads full input → returns structured keyword JSON."""
     logger.info("Step 2: Assembling keywords...")
 
-    # Build context for LLM
+    # Build context for LLM — include all useful fields
     context = {
         "text_output": input_data.get("text_output", ""),
         "anchor_characterization": input_data.get("anchor_characterization", ""),
         "brand_palette": input_data.get("brand_palette", {}),
         "photo_analysis": input_data.get("photo_analysis", {}),
+        "anchor_nickname": input_data.get("anchor_nickname", ""),
+        "anchor_bio": input_data.get("anchor_bio", ""),
     }
 
     response = client.chat.completions.create(
@@ -272,6 +285,6 @@ def _template_fallback(input_data: dict) -> str:
         f'holographic iridescent metallic material. '
         f'Warm side light from left, cool side light from right, '
         f'soft front key light. '
-        f'Pure {bg_color} background, candy color palette, '
+        f'Pure {bg_color} background, vibrant high-saturation color palette, '
         f'commercial art illustration style.'
     )

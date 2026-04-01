@@ -18,6 +18,31 @@ from prompt_builder import (
 )
 from seedream_sdk import SeedreamClient, SeedreamAPIError
 
+
+def preprocess_input(raw: dict) -> dict:
+    """Map datamining format to internal format.
+
+    Handles both the nested anchor_info structure (real datamining)
+    and flat structure (legacy/test format).
+    """
+    # Already in internal format
+    if "text_output" in raw and "anchor_characterization" in raw:
+        return raw
+
+    anchor_info = raw.get("anchor_info", {})
+    anchor = anchor_info.get("anchor", {})
+
+    return {
+        "text_output": raw.get("slogan", ""),
+        "anchor_photo": raw.get("anchor_photo", ""),
+        "anchor_characterization": anchor_info.get("anchor_characterization", ""),
+        "brand_palette": anchor_info.get("brand_palette", {}),
+        "anchor_nickname": anchor.get("nick_name", ""),
+        "anchor_bio": anchor.get("bio_description", ""),
+        "community_type": raw.get("community_type", ""),
+        "slogan_lang": raw.get("slogan_lang", ""),
+    }
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -83,7 +108,11 @@ class Orchestrator:
         self.adj_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def run(self, input_data: dict) -> OrchestrationResult:
-        """Full pipeline: photo analysis → keywords → prompt → generate → eval → retry/reroll."""
+        """Full pipeline: preprocess → photo analysis → keywords → prompt → generate → eval → retry/reroll."""
+
+        # Step 0: Preprocess datamining format to internal format
+        input_data = preprocess_input(input_data)
+        logger.info("Input preprocessed: text_output=%s", input_data.get("text_output"))
 
         # Step 1: Analyze photo if photo_analysis not provided
         if not input_data.get("photo_analysis"):

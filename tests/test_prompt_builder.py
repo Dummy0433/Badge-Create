@@ -34,7 +34,7 @@ class TestBuildPrompt:
         prompt = build_prompt(SAMPLE_INPUT)
         assert "C4D Badge" in prompt
         assert "3D Pixar realistic cartoon style" in prompt
-        assert "candy color palette" in prompt
+        assert "color palette" in prompt
 
     def test_contains_text_output(self, _mock):
         prompt = build_prompt(SAMPLE_INPUT)
