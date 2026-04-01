@@ -14,10 +14,20 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from eval_client import EvalClient
-from eval_store import pick_eval_references
 from orchestrator import preprocess_input
 from prompt_builder import analyze_photo, assemble_keywords, expand_prompt, validate_prompt, build_negative_prompt
+
+# Lazy-init OpenAI client for prompt building
+_llm_client = None
+
+def _get_llm_client():
+    global _llm_client
+    if _llm_client is None:
+        import openai as _openai
+        from dotenv import load_dotenv
+        load_dotenv()
+        _llm_client = _openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _llm_client
 from reference_store import pick_references, ReferenceImage
 from seedream_sdk import SeedreamClient, SeedreamAPIError
 
@@ -68,6 +78,39 @@ def _build_ref_kwargs(prompt: str, refs: list[ReferenceImage]) -> dict:
     }
     logger.info("Injected %d refs, PE: %s", len(refs), result["pre_llm_result"])
     return result
+
+
+@app.post("/api/build_prompt")
+async def build_prompt_endpoint(
+    input_json: str = Form(...),
+    anchor_photo: UploadFile | None = File(None),
+):
+    """Build prompt from JSON + photo. Returns the generated prompt text."""
+    try:
+        input_data = json.loads(input_json)
+    except json.JSONDecodeError as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid JSON: {e}"})
+
+    input_data = preprocess_input(input_data)
+    llm = _get_llm_client()
+
+    # Photo analysis
+    if anchor_photo:
+        photo_bytes = await anchor_photo.read()
+        input_data["photo_analysis"] = analyze_photo(llm, photo_bytes)
+    elif not input_data.get("photo_analysis"):
+        return JSONResponse(status_code=400, content={"error": "No photo or photo_analysis"})
+
+    keywords = assemble_keywords(llm, input_data)
+    prompt = expand_prompt(llm, keywords)
+    validate_prompt(prompt, input_data)
+
+    return {
+        "prompt": prompt,
+        "negative_prompt": build_negative_prompt(),
+        "keywords": keywords,
+        "photo_analysis": input_data.get("photo_analysis", {}),
+    }
 
 
 @app.get("/api/references")
@@ -324,146 +367,6 @@ async def generate_sweep(
         "total": len(combos),
         "success": len(results),
         "failed": len(errors),
-        "results": results,
-        "errors": errors,
-    }
-
-
-@app.post("/api/orchestrate")
-async def orchestrate(
-    input_json: str = Form(...),
-    count: int = Form(10),
-    use_refs: bool = Form(True),
-    ref_count: int = Form(2),
-    anchor_photo: UploadFile | None = File(None),
-):
-    """Full pipeline: JSON+photo → prompt → batch generate → eval → ranked results.
-
-    Uses the SAME batch generation logic as /api/generate_batch, just adds:
-    - Front: auto-generate prompt from JSON+photo
-    - Back: eval each result and sort by score
-    """
-    try:
-        input_data = json.loads(input_json)
-    except json.JSONDecodeError as e:
-        return JSONResponse(status_code=400, content={"error": f"Invalid JSON: {e}"})
-
-    # Preprocess datamining format
-    input_data = preprocess_input(input_data)
-
-    # --- Front node: generate prompt from JSON + photo ---
-    import openai as _openai
-    from dotenv import load_dotenv
-    load_dotenv()
-    llm_client = _openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-    # Photo analysis
-    images_bytes = None
-    if anchor_photo:
-        photo_bytes = await anchor_photo.read()
-        input_data["photo_analysis"] = analyze_photo(llm_client, photo_bytes)
-        images_bytes = [photo_bytes]
-    elif not input_data.get("photo_analysis"):
-        return JSONResponse(status_code=400, content={"error": "No photo or photo_analysis provided"})
-
-    # Keywords → prompt expansion
-    keywords = assemble_keywords(llm_client, input_data)
-    prompt = expand_prompt(llm_client, keywords)
-    validate_prompt(prompt, input_data)
-    negative_prompt = build_negative_prompt()
-
-    logger.info("Orchestrate: prompt generated (%d chars)", len(prompt))
-
-    # --- Middle: existing batch logic (same as generate_batch) ---
-    extra_kwargs = {
-        "guidance_scale": 8.0,
-        "cfg_rescale_factor": 0.0,
-        "single_edit_guidance_weight": 2.0,
-        "single_edit_guidance_weight_image": 1.0,
-    }
-
-    if use_refs:
-        refs = pick_references(ref_count)
-        images_bytes = _inject_references(images_bytes, refs)
-        extra_kwargs.update(_build_ref_kwargs(prompt, refs))
-
-    seeds = [randint(0, 2**31) for _ in range(count)]
-
-    def _call(seed: int):
-        return seed, client.generate(
-            prompt=prompt,
-            images=images_bytes,
-            width=2048,
-            height=2048,
-            seed=seed,
-            negative_prompt=negative_prompt,
-            force_single=True,
-            **extra_kwargs,
-        )
-
-    results = []
-    errors = []
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    with ThreadPoolExecutor(max_workers=min(count, 10)) as pool:
-        future_to_seed = {pool.submit(_call, s): s for s in seeds}
-        for future in as_completed(future_to_seed):
-            seed = future_to_seed[future]
-            try:
-                seed, result = future.result()
-                for i, img in enumerate(result.images):
-                    path = os.path.join(OUTPUT_DIR, f"{timestamp}_s{seed}_{i}.jpg")
-                    with open(path, "wb") as f:
-                        f.write(img)
-                results.append({
-                    "seed": seed,
-                    "request_id": result.request_id,
-                    "images_bytes": result.images,
-                    "images": [
-                        f"data:image/jpeg;base64,{base64.b64encode(img).decode()}"
-                        for img in result.images
-                    ],
-                })
-            except SeedreamAPIError as e:
-                logger.error("Batch seed=%d error: %s", seed, e)
-                errors.append({"seed": seed, "error": str(e)})
-            except Exception as e:
-                logger.error("Batch seed=%d unexpected: %s", seed, e)
-                errors.append({"seed": seed, "error": str(e)})
-
-    # --- Back node: eval each result ---
-    eval_client = EvalClient()
-    good_refs, bad_refs = pick_eval_references()
-
-    for r in results:
-        if r["images_bytes"]:
-            try:
-                ev = eval_client.evaluate(
-                    generated_image=r["images_bytes"][0],
-                    input_data=input_data,
-                    good_refs=good_refs,
-                    bad_refs=bad_refs,
-                )
-                r["eval"] = {
-                    "score": ev.total_score,
-                    "passed": ev.passed,
-                    "dimensions": ev.dimensions,
-                    "issues": ev.issues,
-                }
-            except Exception as e:
-                logger.error("Eval seed=%d error: %s", r["seed"], e)
-                r["eval"] = {"score": 0, "passed": False, "dimensions": {}, "issues": [str(e)]}
-        # Remove raw bytes from response
-        del r["images_bytes"]
-
-    # Sort by eval score descending
-    results.sort(key=lambda r: r.get("eval", {}).get("score", 0), reverse=True)
-
-    return {
-        "total": count,
-        "success": len(results),
-        "failed": len(errors),
-        "prompt": prompt,
         "results": results,
         "errors": errors,
     }

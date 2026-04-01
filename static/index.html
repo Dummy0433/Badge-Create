@@ -79,8 +79,8 @@
         <h1>Seedream 4.5 Test UI</h1>
 
         <div class="form-section">
-            <h2>Orchestrator Input (JSON + Photo)</h2>
-            <textarea id="inputJson" style="height:200px; font-family:monospace; font-size:12px;">{
+            <h2>Input</h2>
+            <textarea id="inputJson" style="height:180px; font-family:monospace; font-size:12px;">{
   "slogan": "Diedriht",
   "community_type": "host",
   "slogan_lang": "Spanish",
@@ -101,15 +101,16 @@
                 <label for="anchor_photo">Anchor Photo</label>
                 <input type="file" id="anchor_photo" accept="image/*">
             </div>
-            <button class="btn" style="background:#059669; margin-top:12px;" id="orchestrateBtn" onclick="runOrchestrate()">Orchestrate (Full Pipeline)</button>
-            <span class="hint" style="margin-left:8px;">Photo analysis → Keywords → Prompt → Generate → Eval → Retry</span>
+            <div style="margin-top: 12px;">
+                <button class="btn" style="background:#059669;" id="buildPromptBtn" onclick="buildPrompt()">Build Prompt from JSON + Photo</button>
+                <span class="hint" style="margin-left:8px;">Photo analysis → Keywords → Prompt expansion</span>
+            </div>
         </div>
 
         <div class="form-section">
-            <h2 class="collapsible" onclick="toggleCollapse(this)">Manual Prompt (Advanced)</h2>
-            <div class="collapse-content">
-                <textarea id="prompt" placeholder="Enter manual prompt for direct Seedream generation..."></textarea>
-            </div>
+            <h2>Prompt</h2>
+            <textarea id="prompt" placeholder="Click 'Build Prompt' above, or type manually..."></textarea>
+            <span class="hint">Auto-generated from JSON+Photo, or enter manually. This is what goes to Seedream.</span>
         </div>
 
         <div class="form-section">
@@ -278,7 +279,7 @@
         }
 
         function disableAllBtns(disabled) {
-            ['generateBtn', 'batchBtn', 'sweepBtn', 'orchestrateBtn'].forEach(id => {
+            ['generateBtn', 'batchBtn', 'sweepBtn', 'buildPromptBtn'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.disabled = disabled;
             });
@@ -486,12 +487,8 @@
             }
         }
 
-        // --- Orchestrate: JSON+photo → prompt → batch → eval → ranked ---
-        async function runOrchestrate() {
-            const section = document.getElementById('resultSection');
-            const content = document.getElementById('resultContent');
-            const count = parseInt(document.getElementById('batchCount').value) || 10;
-
+        // --- Build Prompt from JSON + Photo ---
+        async function buildPrompt() {
             let inputJson;
             try {
                 inputJson = JSON.parse(document.getElementById('inputJson').value);
@@ -501,87 +498,33 @@
             }
 
             const photoFile = document.getElementById('anchor_photo').files[0];
+            if (!photoFile) {
+                alert('Please upload an anchor photo');
+                return;
+            }
 
             disableAllBtns(true);
-            section.classList.add('visible');
-            const startTime = Date.now();
-            content.innerHTML = `<div class="loading">Generating prompt + batch ${count} images + eval...</div>`;
-            const progressTimer = setInterval(() => {
-                const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                const min = Math.floor(elapsed / 60);
-                const sec = elapsed % 60;
-                const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
-                content.innerHTML = `<div class="loading">Orchestrating ${count} images... ${timeStr} elapsed</div>`;
-            }, 2000);
+            const promptEl = document.getElementById('prompt');
+            promptEl.value = 'Building prompt...';
 
             const formData = new FormData();
             formData.append('input_json', JSON.stringify(inputJson));
-            formData.append('count', count);
-            formData.append('use_refs', document.getElementById('use_refs').checked);
-            formData.append('ref_count', document.getElementById('ref_count').value || '2');
-            if (photoFile) {
-                formData.append('anchor_photo', photoFile);
-            }
+            formData.append('anchor_photo', photoFile);
 
             try {
-                const resp = await fetch('/api/orchestrate', {
-                    method: 'POST', body: formData,
-                    signal: AbortSignal.timeout(600000),
-                });
+                const resp = await fetch('/api/build_prompt', { method: 'POST', body: formData });
                 const data = await resp.json();
                 if (!resp.ok) {
-                    content.innerHTML = `<div class="error">${data.error || 'Unknown error'}</div>`;
+                    promptEl.value = '';
+                    alert('Error: ' + (data.error || 'Unknown'));
                     return;
                 }
-
-                let html = '';
-                html += `<div class="batch-summary"><strong>${data.success}</strong> / ${data.total} generated`;
-                if (data.failed > 0) html += `, <strong style="color:#dc2626">${data.failed} failed</strong>`;
-                html += `</div>`;
-
-                if (data.prompt) {
-                    html += `<span class="collapsible" onclick="toggleCollapse(this)">Generated Prompt</span>`;
-                    html += `<div class="collapse-content"><div class="llm-result">${data.prompt}</div></div>`;
-                }
-
-                if (data.errors && data.errors.length > 0) {
-                    html += `<div class="batch-errors">`;
-                    for (const err of data.errors) html += `Seed ${err.seed}: ${err.error}<br>`;
-                    html += `</div>`;
-                }
-
-                if (data.results && data.results.length > 0) {
-                    html += '<div class="batch-grid">';
-                    for (const r of data.results) {
-                        const ev = r.eval || {};
-                        const scoreColor = ev.score >= 8 ? '#059669' : ev.score >= 6 ? '#b45309' : '#dc2626';
-                        html += `<div class="batch-card">`;
-                        for (const img of r.images) {
-                            html += `<img src="${img}" alt="generated">`;
-                        }
-                        html += `<div class="card-params" style="color:${scoreColor}; font-weight:bold;">Score: ${ev.score || '-'} ${ev.passed ? '✓' : ''}</div>`;
-                        html += `<div class="card-meta">Seed: ${r.seed}</div>`;
-                        if (ev.dimensions) {
-                            html += `<span class="collapsible" onclick="toggleCollapse(this)" style="font-size:11px;">Eval Details</span>`;
-                            html += `<div class="collapse-content"><div class="llm-result" style="font-size:10px;">`;
-                            html += Object.entries(ev.dimensions).map(([k,v]) => `${k}: ${v}`).join('\n');
-                            if (ev.issues && ev.issues.length) html += `\n\nIssues:\n${ev.issues.join('\n')}`;
-                            html += `</div></div>`;
-                        }
-                        html += `</div>`;
-                    }
-                    html += '</div>';
-                }
-
-                content.innerHTML = html;
+                promptEl.value = data.prompt;
+                document.getElementById('negative_prompt').value = data.negative_prompt;
             } catch (e) {
-                if (e.name === 'TimeoutError') {
-                    content.innerHTML = `<div class="error">Request timed out (10min).</div>`;
-                } else {
-                    content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
-                }
+                promptEl.value = '';
+                alert('Failed: ' + e.message);
             } finally {
-                clearInterval(progressTimer);
                 disableAllBtns(false);
             }
         }
