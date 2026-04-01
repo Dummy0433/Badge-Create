@@ -9,12 +9,14 @@ Seedream 4.5 image generation testing tool — Python SDK + FastAPI server + van
 ## Commands
 
 ```bash
-pip install -r requirements.txt          # Install dependencies
-uvicorn server:app --reload --port 8000  # Start dev server (UI at http://localhost:8000)
-pytest tests/ -v                         # Run all tests
-pytest tests/test_seedream_sdk.py -v     # SDK tests only
-pytest tests/test_server.py -v           # Server tests only
-pytest tests/path::TestClass::test_name -v  # Single test
+pip install -r requirements.txt                # Install dependencies
+uvicorn server:app --reload --port 8000        # Start dev server (UI at http://localhost:8000)
+pytest tests/ -v                               # Run all tests (32 tests)
+pytest tests/test_seedream_sdk.py -v           # SDK tests only
+pytest tests/test_server.py -v                 # Server tests only
+pytest tests/path::TestClass::test_name -v     # Single test
+python3 run_orchestrator.py                    # Run orchestration pipeline with sample input
+python3 run_orchestrator.py input.json         # Run with custom input JSON
 ```
 
 ## Architecture
@@ -26,6 +28,16 @@ Three layers, single-directory structure:
 - **`static/index.html`** — Single-page vanilla HTML/CSS/JS. No frameworks. Supports single and batch generation with grid display.
 
 Data flow: Frontend FormData -> FastAPI -> SeedreamClient.generate() -> HTTP multipart POST to Seedream API -> parse afr_data[].pic (base64 JPEG) + afr_data[].pic_conf (JSON metadata) -> base64 data URI back to frontend.
+
+### Eval & Orchestration Pipeline
+
+- **`prompt_builder.py`** — Template-based prompt assembly. Fixed segments (render style, lighting, composition) + variable slots filled from datamining JSON (brand_palette, photo_analysis, anchor_characterization, text_output). Pre-check validates all required fields present.
+- **`eval_store.py`** — Good/bad reference image library for eval (hardcoded now, DB later). Same pattern as `reference_store.py`.
+- **`eval_client.py`** — GPT-5.4 vision eval. Sends generated image + good/bad refs + criteria to GPT-5.4, returns structured scores on 7 dimensions: heart_carrier, character, decorations, text_render, color_match, composition, quality. Pass threshold: average >= 8.0.
+- **`orchestrator.py`** — Full pipeline: `build_prompt()` -> Seedream generate -> eval -> retry (max 2, adjust prompt targeting failing dimensions, always from original prompt) -> reroll (max 1, LLM rewrites prompt from scratch) -> return best image.
+- **`run_orchestrator.py`** — CLI entry point. Uses sample input or custom JSON file.
+
+Pipeline flow: `Input JSON -> prompt_builder -> [generate -> eval -> adjust?] x3 -> [reroll -> generate -> eval] x1 -> best result`
 
 ## Seedream 4.5 API Reference
 
