@@ -1,10 +1,10 @@
 # tests/test_orchestrator.py
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 import pytest
-from orchestrator import Orchestrator, OrchestrationResult
+from orchestrator import Orchestrator, UnitResult, BatchResult
 from eval_client import EvalResult
+from generator import GenerateResult
 from prompt_builder import PromptValidationError
-from seedream_sdk import SeedreamResponse
 
 
 SAMPLE_INPUT = {
@@ -24,167 +24,173 @@ SAMPLE_INPUT = {
     },
 }
 
-MOCK_KEYWORDS = {"character": {"gender": "male"}, "text": {"content": "Wells"}}
-MOCK_PROMPT = 'C4D Badge, 3D Pixar realistic cartoon style. heart "Wells" test prompt'
+MOCK_KEYWORDS = {
+    "character": {"gender": "male", "hair": "dark hair", "eyes": "brown",
+                  "expression": "smile", "clothing": "blue hoodie"},
+    "heart_carrier": {"color_name": "Gold", "color_hex": "#D4AF37",
+                      "material": "soft candy"},
+    "text": {"content": "Wells", "color_tint": "#007BFF"},
+    "decorations": {"elements": ["music note"]},
+    "background_color": "#000000",
+}
+MOCK_PROMPT = 'C4D Badge, 3D Pixar realistic cartoon style. heart "Wells" test'
 
 
-def _make_eval_result(passed: bool, score: float, suggestion: str = "") -> EvalResult:
+def _eval(passed: bool, score: float) -> EvalResult:
     return EvalResult(
-        passed=passed,
-        total_score=score,
-        dimensions={"heart_carrier": score, "character": score, "decorations": score,
-                     "text_render": score, "color_match": score, "composition": score,
+        passed=passed, total_score=score,
+        dimensions={"heart_carrier": score, "character": score,
+                     "decorations": score, "text_render": score,
+                     "color_match": score, "composition": score,
                      "quality": score},
         issues=[] if passed else ["some issue"],
-        suggestion=suggestion,
     )
 
 
-def _make_seedream_response() -> SeedreamResponse:
-    return SeedreamResponse(
-        images=[b"fake-jpeg-data"],
-        llm_result="",
-        request_id="test-123",
+def _gen_result(seed: int = 1) -> GenerateResult:
+    return GenerateResult(
+        image=b"fake-jpeg", seed=seed, request_id=f"req-{seed}",
     )
 
 
-def _patch_prompt_steps():
-    """Patch the 3 LLM prompt-building steps to return mock data."""
-    return [
-        patch("orchestrator.assemble_keywords", return_value=MOCK_KEYWORDS),
-        patch("orchestrator.expand_prompt", return_value=MOCK_PROMPT),
-        patch("orchestrator.validate_prompt"),
-    ]
+def _make_orchestrator(generator, eval_client, llm_client=None, **kwargs):
+    return Orchestrator(
+        llm_client=llm_client or MagicMock(),
+        generator=generator,
+        eval_client=eval_client,
+        **kwargs,
+    )
 
 
-class TestOrchestratorPassOnFirstTry:
-    @patch("orchestrator.openai.OpenAI")
-    def test_returns_on_first_pass(self, mock_openai_cls):
-        with patch("orchestrator.assemble_keywords", return_value=MOCK_KEYWORDS), \
-             patch("orchestrator.expand_prompt", return_value=MOCK_PROMPT), \
-             patch("orchestrator.validate_prompt"):
+class TestSingleUnitPassFirst:
+    @patch("orchestrator.pick_eval_references")
+    @patch("orchestrator.build_prompt", return_value=(MOCK_KEYWORDS, MOCK_PROMPT))
+    @patch("orchestrator.process")
+    def test_pass_on_first_try(self, mock_process, mock_build, mock_pick_refs):
+        mock_process.return_value = SAMPLE_INPUT
+        mock_pick_refs.return_value = ([], [])
 
-            seedream = MagicMock()
-            seedream.generate.return_value = _make_seedream_response()
+        gen = MagicMock()
+        gen.generate.return_value = _gen_result()
+        ev = MagicMock()
+        ev.evaluate.return_value = _eval(True, 8.5)
 
-            eval_client = MagicMock()
-            eval_client.evaluate.return_value = _make_eval_result(True, 8.5)
+        orch = _make_orchestrator(gen, ev)
+        result = orch.run_batch(SAMPLE_INPUT, count=1)
 
-            orch = Orchestrator(seedream_client=seedream, eval_client=eval_client)
-            result = orch.run(SAMPLE_INPUT)
-
-            assert isinstance(result, OrchestrationResult)
-            assert result.passed is True
-            assert result.rounds == 1
-            assert len(result.eval_history) == 1
-            seedream.generate.assert_called_once()
-
-
-class TestOrchestratorRetry:
-    @patch("orchestrator.openai.OpenAI")
-    def test_retries_on_failure_then_passes(self, mock_openai_cls):
-        mock_adj_client = MagicMock()
-        mock_openai_cls.return_value = mock_adj_client
-        mock_adj_client.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=MagicMock(content="adjusted prompt text"))]
-        )
-
-        with patch("orchestrator.assemble_keywords", return_value=MOCK_KEYWORDS), \
-             patch("orchestrator.expand_prompt", return_value=MOCK_PROMPT), \
-             patch("orchestrator.validate_prompt"):
-
-            seedream = MagicMock()
-            seedream.generate.return_value = _make_seedream_response()
-
-            eval_client = MagicMock()
-            eval_client.evaluate.side_effect = [
-                _make_eval_result(False, 6.0, "fix text rendering"),
-                _make_eval_result(True, 8.5),
-            ]
-
-            orch = Orchestrator(seedream_client=seedream, eval_client=eval_client)
-            result = orch.run(SAMPLE_INPUT)
-
-            assert result.passed is True
-            assert result.rounds == 2
-            assert len(result.prompt_history) == 2
-
-    @patch("orchestrator.openai.OpenAI")
-    def test_rerolls_after_max_retries(self, mock_openai_cls):
-        mock_adj_client = MagicMock()
-        mock_openai_cls.return_value = mock_adj_client
-        mock_adj_client.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=MagicMock(content="rerolled prompt text"))]
-        )
-
-        with patch("orchestrator.assemble_keywords", return_value=MOCK_KEYWORDS), \
-             patch("orchestrator.expand_prompt", return_value=MOCK_PROMPT), \
-             patch("orchestrator.validate_prompt"):
-
-            seedream = MagicMock()
-            seedream.generate.return_value = _make_seedream_response()
-
-            eval_client = MagicMock()
-            eval_client.evaluate.side_effect = [
-                _make_eval_result(False, 5.0, "fix A"),
-                _make_eval_result(False, 5.5, "fix B"),
-                _make_eval_result(False, 6.0, "fix C"),
-                _make_eval_result(True, 8.5),
-            ]
-
-            orch = Orchestrator(
-                seedream_client=seedream, eval_client=eval_client,
-                max_retries=2, max_rerolls=1,
-            )
-            result = orch.run(SAMPLE_INPUT)
-
-            assert result.passed is True
-            assert result.rounds == 4
+        assert isinstance(result, BatchResult)
+        assert len(result.results) == 1
+        assert result.results[0].passed is True
+        assert result.results[0].score == 8.5
+        assert result.results[0].rounds == 1
+        gen.generate.assert_called_once()
 
 
-class TestOrchestratorFallback:
-    @patch("orchestrator.openai.OpenAI")
-    def test_returns_best_on_all_failures(self, mock_openai_cls):
-        mock_adj_client = MagicMock()
-        mock_openai_cls.return_value = mock_adj_client
-        mock_adj_client.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=MagicMock(content="adjusted prompt"))]
-        )
+class TestSingleUnitRetryEscalation:
+    @patch("orchestrator.pick_eval_references")
+    @patch("orchestrator.build_prompt", return_value=(MOCK_KEYWORDS, MOCK_PROMPT))
+    @patch("orchestrator.process")
+    def test_level1_retry_new_seed(self, mock_process, mock_build, mock_pick_refs):
+        """Fail first, pass on Level 1 retry (same prompt, new seed)."""
+        mock_process.return_value = SAMPLE_INPUT
+        mock_pick_refs.return_value = ([], [])
 
-        with patch("orchestrator.assemble_keywords", return_value=MOCK_KEYWORDS), \
-             patch("orchestrator.expand_prompt", return_value=MOCK_PROMPT), \
-             patch("orchestrator.validate_prompt"):
+        gen = MagicMock()
+        gen.generate.return_value = _gen_result()
+        ev = MagicMock()
+        ev.evaluate.side_effect = [_eval(False, 6.0), _eval(True, 8.5)]
 
-            seedream = MagicMock()
-            seedream.generate.return_value = _make_seedream_response()
+        orch = _make_orchestrator(gen, ev, max_retries=2)
+        result = orch.run_batch(SAMPLE_INPUT, count=1)
 
-            eval_client = MagicMock()
-            eval_client.evaluate.side_effect = [
-                _make_eval_result(False, 5.0, "fix A"),
-                _make_eval_result(False, 7.0, "fix B"),
-                _make_eval_result(False, 6.0, "fix C"),
-                _make_eval_result(False, 6.5, "fix D"),
-            ]
+        assert result.results[0].passed is True
+        assert result.results[0].rounds == 2
+        assert gen.generate.call_count == 2
 
-            orch = Orchestrator(
-                seedream_client=seedream, eval_client=eval_client,
-                max_retries=2, max_rerolls=1,
-            )
-            result = orch.run(SAMPLE_INPUT)
+    @patch("orchestrator.expand_prompt", return_value="re-expanded prompt")
+    @patch("orchestrator.pick_eval_references")
+    @patch("orchestrator.build_prompt", return_value=(MOCK_KEYWORDS, MOCK_PROMPT))
+    @patch("orchestrator.process")
+    def test_level2_reexpand(self, mock_process, mock_build, mock_pick_refs, mock_expand):
+        """Fail all Level 1 retries, pass on Level 2 re-expand."""
+        mock_process.return_value = SAMPLE_INPUT
+        mock_pick_refs.return_value = ([], [])
 
-            assert result.passed is False
-            assert result.score == 7.0
+        gen = MagicMock()
+        gen.generate.return_value = _gen_result()
+        ev = MagicMock()
+        # initial + 2 retries fail, re-expand passes
+        ev.evaluate.side_effect = [
+            _eval(False, 5.0), _eval(False, 5.5), _eval(False, 6.0),
+            _eval(True, 8.5),
+        ]
+
+        orch = _make_orchestrator(gen, ev, max_retries=2, max_reexpands=1)
+        result = orch.run_batch(SAMPLE_INPUT, count=1)
+
+        assert result.results[0].passed is True
+        assert result.results[0].rounds == 4
+        mock_expand.assert_called_once()
+
+    @patch("orchestrator.expand_prompt", return_value="re-expanded prompt")
+    @patch("orchestrator.pick_eval_references")
+    @patch("orchestrator.build_prompt", return_value=(MOCK_KEYWORDS, MOCK_PROMPT))
+    @patch("orchestrator.process")
+    def test_all_fail_returns_best(self, mock_process, mock_build, mock_pick_refs, mock_expand):
+        """All retries and re-expands fail — return highest scoring result."""
+        mock_process.return_value = SAMPLE_INPUT
+        mock_pick_refs.return_value = ([], [])
+
+        gen = MagicMock()
+        gen.generate.return_value = _gen_result()
+        ev = MagicMock()
+        ev.evaluate.side_effect = [
+            _eval(False, 5.0), _eval(False, 7.0), _eval(False, 6.0),
+            _eval(False, 6.5),
+        ]
+
+        orch = _make_orchestrator(gen, ev, max_retries=2, max_reexpands=1)
+        result = orch.run_batch(SAMPLE_INPUT, count=1)
+
+        assert result.results[0].passed is False
+        assert result.results[0].score == 7.0
 
 
-class TestOrchestratorValidation:
-    @patch("orchestrator.openai.OpenAI")
-    def test_invalid_input_raises(self, mock_openai_cls):
-        with patch("orchestrator.assemble_keywords", return_value=MOCK_KEYWORDS), \
-             patch("orchestrator.expand_prompt", return_value=MOCK_PROMPT), \
-             patch("orchestrator.validate_prompt", side_effect=PromptValidationError("text_output is empty")):
+class TestBatch:
+    @patch("orchestrator.pick_eval_references")
+    @patch("orchestrator.build_prompt", return_value=(MOCK_KEYWORDS, MOCK_PROMPT))
+    @patch("orchestrator.process")
+    def test_batch_runs_n_units(self, mock_process, mock_build, mock_pick_refs):
+        mock_process.return_value = SAMPLE_INPUT
+        mock_pick_refs.return_value = ([], [])
 
-            orch = Orchestrator(
-                seedream_client=MagicMock(), eval_client=MagicMock()
-            )
-            with pytest.raises(PromptValidationError):
-                orch.run({"text_output": ""})
+        gen = MagicMock()
+        gen.generate.return_value = _gen_result()
+        ev = MagicMock()
+        ev.evaluate.return_value = _eval(True, 9.0)
+
+        orch = _make_orchestrator(gen, ev)
+        result = orch.run_batch(SAMPLE_INPUT, count=3)
+
+        assert isinstance(result, BatchResult)
+        assert result.total == 3
+        assert len(result.results) == 3
+        assert all(r.passed for r in result.results)
+
+    @patch("orchestrator.pick_eval_references")
+    @patch("orchestrator.build_prompt", return_value=(MOCK_KEYWORDS, MOCK_PROMPT))
+    @patch("orchestrator.process")
+    def test_batch_results_sorted_by_score(self, mock_process, mock_build, mock_pick_refs):
+        mock_process.return_value = SAMPLE_INPUT
+        mock_pick_refs.return_value = ([], [])
+
+        gen = MagicMock()
+        gen.generate.return_value = _gen_result()
+        ev = MagicMock()
+        ev.evaluate.side_effect = [_eval(True, 7.0), _eval(True, 9.0), _eval(True, 8.0)]
+
+        orch = _make_orchestrator(gen, ev, max_retries=0, max_reexpands=0)
+        result = orch.run_batch(SAMPLE_INPUT, count=3)
+
+        scores = [r.score for r in result.results]
+        assert scores == sorted(scores, reverse=True)

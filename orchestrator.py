@@ -1,305 +1,297 @@
 # orchestrator.py
-"""Orchestrator: generate → eval → retry/reroll pipeline."""
+"""Orchestrator: unified pipeline with retry escalation, batch, and sweep."""
 
-import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime
 from random import randint
-
-import openai
-from dotenv import load_dotenv
 
 from eval_client import EvalClient, EvalResult
 from eval_store import pick_eval_references
+from generator import Generator, GenerateResult
+from input_processor import process
 from prompt_builder import (
-    analyze_photo, assemble_keywords, expand_prompt,
-    validate_prompt, build_negative_prompt, PromptValidationError,
+    analyze_photo, build_prompt, expand_prompt,
+    build_negative_prompt, PromptValidationError,
 )
-from seedream_sdk import SeedreamClient, SeedreamAPIError
-
-
-def preprocess_input(raw: dict) -> dict:
-    """Map datamining format to internal format.
-
-    Handles both the nested anchor_info structure (real datamining)
-    and flat structure (legacy/test format).
-    """
-    # Already in internal format
-    if "text_output" in raw and "anchor_characterization" in raw:
-        return raw
-
-    anchor_info = raw.get("anchor_info", {})
-    anchor = anchor_info.get("anchor", {})
-
-    return {
-        "text_output": raw.get("slogan", ""),
-        "anchor_photo": raw.get("anchor_photo", ""),
-        "anchor_characterization": anchor_info.get("anchor_characterization", ""),
-        "brand_palette": anchor_info.get("brand_palette", {}),
-        "anchor_nickname": anchor.get("nick_name", ""),
-        "anchor_bio": anchor.get("bio_description", ""),
-        "community_type": raw.get("community_type", ""),
-        "slogan_lang": raw.get("slogan_lang", ""),
-    }
-
-load_dotenv()
+from reference_store import pick_references
 
 logger = logging.getLogger(__name__)
 
-ADJUST_SYSTEM_PROMPT = """\
-You are a prompt engineer. You receive an original image generation prompt and \
-evaluation feedback about what went wrong. Your job is to adjust the prompt to \
-fix the specific issues mentioned.
-
-Rules:
-- Only modify parts of the prompt related to the failing dimensions
-- Do NOT change: render style (C4D Badge, 3D Pixar), lighting, composition rules, \
-candy color palette, or commercial art illustration style
-- Keep the overall structure intact
-- Return ONLY the adjusted prompt text, nothing else"""
-
-REROLL_SYSTEM_PROMPT = """\
-You are a prompt engineer. You receive structured data about a badge to generate \
-and must write a fresh, creative prompt for a Seedream image generation model.
-
-The badge style is FIXED:
-- C4D Badge, 3D Pixar realistic cartoon style
-- Large plump 3D heart shape carrier (candy/jelly material, glossy)
-- Character positioned chest-up, occupying 70% of heart
-- Metallic text at bottom with chrome sweep light effect
-- Floating decorative elements around the heart
-- Candy color palette, commercial art illustration style
-- Specific lighting: warm left, cool right, soft front key light
-
-Fill in the variable parts from the data provided. Write a DIFFERENT creative \
-expansion than a previous attempt — vary the wording and emphasis while keeping \
-all required elements. Return ONLY the prompt text."""
+OUTPUT_DIR = "output"
 
 
 @dataclass
-class OrchestrationResult:
-    """Result of the full orchestration pipeline."""
+class UnitResult:
+    """Result of one pipeline unit (possibly after retries)."""
 
     image: bytes
     score: float
     passed: bool
+    seed: int
+    prompt: str
+    eval_result: EvalResult
     rounds: int
-    prompt_history: list[str] = field(default_factory=list)
-    eval_history: list[EvalResult] = field(default_factory=list)
+    request_id: str
+
+
+@dataclass
+class BatchResult:
+    """Result of a batch run."""
+
+    results: list[UnitResult] = field(default_factory=list)
+    prompt: str = ""
+    keywords: dict = field(default_factory=dict)
+    total: int = 0
+    success: int = 0
+    failed: int = 0
 
 
 class Orchestrator:
-    """Generate → eval → retry/reroll pipeline."""
+    """Unified pipeline: input -> prompt -> generate -> eval -> retry -> batch."""
 
     def __init__(
         self,
-        seedream_client: SeedreamClient,
+        llm_client,
+        generator: Generator,
         eval_client: EvalClient,
         max_retries: int = 2,
-        max_rerolls: int = 1,
+        max_reexpands: int = 1,
         pass_threshold: float = 8.0,
+        max_workers: int = 10,
     ):
-        self.seedream = seedream_client
-        self.eval = eval_client
+        self.llm_client = llm_client
+        self.generator = generator
+        self.eval_client = eval_client
         self.max_retries = max_retries
-        self.max_rerolls = max_rerolls
+        self.max_reexpands = max_reexpands
         self.pass_threshold = pass_threshold
-        self.adj_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.max_workers = max_workers
 
-    def run(self, input_data: dict) -> OrchestrationResult:
-        """Full pipeline: preprocess → photo analysis → keywords → prompt → generate → eval → retry/reroll."""
+    def run_batch(
+        self,
+        input_data: dict,
+        photo_bytes: bytes | None = None,
+        count: int = 1,
+        use_refs: bool = True,
+        ref_count: int = 2,
+    ) -> BatchResult:
+        """Main entry point for both single and batch generation.
 
-        # Step 0: Preprocess datamining format to internal format
-        input_data = preprocess_input(input_data)
-        logger.info("Input preprocessed: text_output=%s", input_data.get("text_output"))
+        1. Normalize input
+        2. Analyze photo (if provided)
+        3. Build prompt (keywords + expand)
+        4. Parallel N x _run_single_unit with retry escalation
+        5. Sort results by score
+        """
+        input_data = process(input_data)
 
-        # Step 1: Analyze photo if photo_analysis not provided
-        if not input_data.get("photo_analysis"):
-            anchor_photo = input_data.get("anchor_photo", "")
-            if not anchor_photo:
-                raise PromptValidationError("Neither photo_analysis nor anchor_photo provided")
-            # Load photo bytes
-            if os.path.isfile(anchor_photo):
-                with open(anchor_photo, "rb") as f:
-                    photo_bytes = f.read()
-            else:
-                import base64 as b64mod
-                photo_bytes = b64mod.b64decode(anchor_photo)
-            input_data["photo_analysis"] = analyze_photo(self.adj_client, photo_bytes)
-            logger.info("Photo analysis complete: %s", input_data["photo_analysis"])
+        if photo_bytes and not input_data.get("photo_analysis"):
+            input_data["photo_analysis"] = analyze_photo(self.llm_client, photo_bytes)
 
-        # Step 2-3: Assemble keywords → expand into prompt
-        keywords = assemble_keywords(self.adj_client, input_data)
-        original_prompt = expand_prompt(self.adj_client, keywords)
-
-        # Step 4: Validate
-        validate_prompt(original_prompt, input_data)
-        logger.info("Prompt validated. Starting generation loop.")
-
+        keywords, prompt = build_prompt(input_data, client=self.llm_client)
         negative_prompt = build_negative_prompt()
+        logger.info("Prompt built (%d chars)", len(prompt))
 
-        all_images: list[bytes] = []
-        all_scores: list[float] = []
-        all_prompts: list[str] = []
-        all_evals: list[EvalResult] = []
+        refs = pick_references(ref_count) if use_refs else []
+        good_refs, bad_refs = pick_eval_references()
 
-        # Phase 1: original + retries
-        current_prompt = original_prompt
-        for attempt in range(1 + self.max_retries):
-            image, eval_result = self._generate_and_eval(
-                current_prompt, negative_prompt, input_data, attempt
-            )
-            all_images.append(image)
-            all_scores.append(eval_result.total_score)
-            all_prompts.append(current_prompt)
-            all_evals.append(eval_result)
-
-            if eval_result.passed:
-                logger.info("Round %d: PASSED (score=%.1f)", attempt, eval_result.total_score)
-                return OrchestrationResult(
-                    image=image, score=eval_result.total_score, passed=True,
-                    rounds=len(all_evals), prompt_history=all_prompts,
-                    eval_history=all_evals,
-                )
-
-            logger.info(
-                "Round %d: FAILED (score=%.1f) issues=%s",
-                attempt, eval_result.total_score, eval_result.issues,
-            )
-
-            # Adjust prompt for next retry (based on ORIGINAL prompt)
-            if attempt < self.max_retries:
-                current_prompt = self._adjust_prompt(
-                    original_prompt, eval_result
-                )
-
-        # Phase 2: reroll
-        for reroll in range(self.max_rerolls):
-            rerolled_prompt = self._reroll_prompt(input_data)
-            image, eval_result = self._generate_and_eval(
-                rerolled_prompt, negative_prompt, input_data,
-                len(all_evals),
-            )
-            all_images.append(image)
-            all_scores.append(eval_result.total_score)
-            all_prompts.append(rerolled_prompt)
-            all_evals.append(eval_result)
-
-            if eval_result.passed:
-                logger.info(
-                    "Reroll %d: PASSED (score=%.1f)", reroll, eval_result.total_score
-                )
-                return OrchestrationResult(
-                    image=image, score=eval_result.total_score, passed=True,
-                    rounds=len(all_evals), prompt_history=all_prompts,
-                    eval_history=all_evals,
-                )
-
-            logger.info(
-                "Reroll %d: FAILED (score=%.1f)", reroll, eval_result.total_score
-            )
-
-        # All attempts failed — return best
-        best_idx = all_scores.index(max(all_scores))
-        logger.warning(
-            "All %d rounds failed. Returning best (score=%.1f)",
-            len(all_evals), all_scores[best_idx],
-        )
-        return OrchestrationResult(
-            image=all_images[best_idx], score=all_scores[best_idx], passed=False,
-            rounds=len(all_evals), prompt_history=all_prompts,
-            eval_history=all_evals,
-        )
-
-    def _generate_and_eval(
-        self, prompt: str, negative_prompt: str, input_data: dict, round_num: int
-    ) -> tuple[bytes, EvalResult]:
-        """Generate image with Seedream and evaluate it."""
-        seed = randint(0, 2**31)
-        logger.info("Round %d: generating (seed=%d)", round_num, seed)
-
-        try:
-            result = self.seedream.generate(
+        def _run_unit(_idx: int) -> UnitResult:
+            return self._run_single_unit(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
+                keywords=keywords,
+                input_data=input_data,
+                photo_bytes=photo_bytes,
+                refs=refs,
+                good_refs=good_refs,
+                bad_refs=bad_refs,
+            )
+
+        results = []
+        workers = min(count, self.max_workers)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_run_unit, i): i for i in range(count)}
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    logger.error("Unit %d failed: %s", futures[future], e)
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        success = sum(1 for r in results if r.passed)
+
+        return BatchResult(
+            results=results,
+            prompt=prompt,
+            keywords=keywords,
+            total=count,
+            success=success,
+            failed=count - len(results),
+        )
+
+    def run_sweep(
+        self,
+        input_data: dict,
+        photo_bytes: bytes | None = None,
+        param_combos: list[dict] | None = None,
+        use_refs: bool = True,
+        ref_count: int = 2,
+    ) -> BatchResult:
+        """Like run_batch but each unit uses different generation params."""
+        if not param_combos:
+            return self.run_batch(input_data, photo_bytes, count=1,
+                                  use_refs=use_refs, ref_count=ref_count)
+
+        input_data = process(input_data)
+
+        if photo_bytes and not input_data.get("photo_analysis"):
+            input_data["photo_analysis"] = analyze_photo(self.llm_client, photo_bytes)
+
+        keywords, prompt = build_prompt(input_data, client=self.llm_client)
+        negative_prompt = build_negative_prompt()
+
+        refs = pick_references(ref_count) if use_refs else []
+        good_refs, bad_refs = pick_eval_references()
+
+        def _run_unit(params: dict) -> UnitResult:
+            return self._run_single_unit(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                keywords=keywords,
+                input_data=input_data,
+                photo_bytes=photo_bytes,
+                refs=refs,
+                good_refs=good_refs,
+                bad_refs=bad_refs,
+                extra_gen_kwargs=params,
+            )
+
+        results = []
+        workers = min(len(param_combos), self.max_workers)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_run_unit, p): p for p in param_combos}
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    logger.error("Sweep unit failed: %s", e)
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        success = sum(1 for r in results if r.passed)
+
+        return BatchResult(
+            results=results,
+            prompt=prompt,
+            keywords=keywords,
+            total=len(param_combos),
+            success=success,
+            failed=len(param_combos) - len(results),
+        )
+
+    def _run_single_unit(
+        self,
+        prompt: str,
+        negative_prompt: str,
+        keywords: dict,
+        input_data: dict,
+        photo_bytes: bytes | None,
+        refs: list,
+        good_refs: list,
+        bad_refs: list,
+        extra_gen_kwargs: dict | None = None,
+    ) -> UnitResult:
+        """One atomic unit with retry escalation.
+
+        Round 0:   generate(prompt) -> eval
+        Level 1:   generate(prompt, new_seed) -> eval  (up to max_retries)
+        Level 2:   expand(keywords) -> generate -> eval (up to max_reexpands)
+        Exhaust:   return best scoring result
+        """
+        gen_kwargs = {
+            "guidance_scale": 8.0,
+            "cfg_rescale_factor": 0.0,
+            "single_edit_guidance_weight": 2.0,
+            "single_edit_guidance_weight_image": 1.0,
+        }
+        if extra_gen_kwargs:
+            gen_kwargs.update(extra_gen_kwargs)
+
+        best: UnitResult | None = None
+        current_prompt = prompt
+        round_num = 0
+
+        def _attempt(p: str) -> UnitResult:
+            nonlocal round_num
+            round_num += 1
+            seed = randint(0, 2**31)
+            gen_result = self.generator.generate(
+                prompt=p,
+                negative_prompt=negative_prompt,
                 seed=seed,
-                guidance_scale=8.0,
-                cfg_rescale_factor=0.0,
-                single_edit_guidance_weight=2.0,
-                single_edit_guidance_weight_image=1.0,
+                photo_bytes=photo_bytes,
+                refs=refs if refs else None,
+                **gen_kwargs,
             )
-            image = result.images[0] if result.images else b""
-        except SeedreamAPIError as e:
-            logger.error("Round %d: Seedream error: %s", round_num, e)
-            image = b""
+            self._save_image(gen_result.image, seed, round_num)
+            eval_result = self.eval_client.evaluate(
+                generated_image=gen_result.image,
+                input_data=input_data,
+                good_refs=good_refs,
+                bad_refs=bad_refs,
+            )
+            logger.info("Round %d: seed=%d score=%.1f", round_num, seed, eval_result.total_score)
+            return UnitResult(
+                image=gen_result.image,
+                score=eval_result.total_score,
+                passed=eval_result.passed,
+                seed=seed,
+                prompt=p,
+                eval_result=eval_result,
+                rounds=round_num,
+                request_id=gen_result.request_id,
+            )
 
+        def _track_best(unit: UnitResult) -> UnitResult:
+            nonlocal best
+            if best is None or unit.score > best.score:
+                best = unit
+            return unit
+
+        # Initial attempt
+        result = _track_best(_attempt(current_prompt))
+        if result.passed:
+            return result
+
+        # Level 1: cheap retries (new seed, same prompt)
+        for _ in range(self.max_retries):
+            result = _track_best(_attempt(current_prompt))
+            if result.passed:
+                return result
+
+        # Level 2: re-expand prompt from same keywords
+        for _ in range(self.max_reexpands):
+            current_prompt = expand_prompt(self.llm_client, keywords)
+            logger.info("Level 2: re-expanded prompt (%d chars)", len(current_prompt))
+            result = _track_best(_attempt(current_prompt))
+            if result.passed:
+                return result
+
+        # All exhausted — return best
+        logger.warning("All %d rounds exhausted, returning best (score=%.1f)",
+                        round_num, best.score)
+        best.rounds = round_num
+        return best
+
+    def _save_image(self, image: bytes, seed: int, round_num: int) -> None:
+        """Save intermediate image for debugging."""
         if not image:
-            return b"", EvalResult(
-                passed=False, total_score=0.0, suggestion="Generation failed"
-            )
-
-        # Save intermediate image for debugging
-        from datetime import datetime
+            return
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join("output", f"{ts}_round{round_num}_s{seed}.jpg")
-        os.makedirs("output", exist_ok=True)
+        path = os.path.join(OUTPUT_DIR, f"{ts}_r{round_num}_s{seed}.jpg")
         with open(path, "wb") as f:
             f.write(image)
-        logger.info("Round %d: saved to %s", round_num, path)
-
-        good_refs, bad_refs = pick_eval_references()
-        eval_result = self.eval.evaluate(
-            generated_image=image,
-            input_data=input_data,
-            good_refs=good_refs,
-            bad_refs=bad_refs,
-        )
-
-        logger.info(
-            "Round %d: eval score=%.1f dims=%s",
-            round_num, eval_result.total_score, eval_result.dimensions,
-        )
-        return image, eval_result
-
-    def _adjust_prompt(self, original_prompt: str, eval_result: EvalResult) -> str:
-        """Use LLM to make targeted adjustments to the original prompt."""
-        feedback = (
-            f"Scores: {eval_result.dimensions}\n"
-            f"Issues: {eval_result.issues}\n"
-            f"Suggestion: {eval_result.suggestion}"
-        )
-
-        response = self.adj_client.chat.completions.create(
-            model="gpt-5.4",
-            messages=[
-                {"role": "system", "content": ADJUST_SYSTEM_PROMPT},
-                {"role": "user", "content": (
-                    f"Original prompt:\n{original_prompt}\n\n"
-                    f"Evaluation feedback:\n{feedback}\n\n"
-                    f"Return the adjusted prompt:"
-                )},
-            ],
-            max_completion_tokens=2000,
-        )
-        adjusted = response.choices[0].message.content.strip()
-        logger.info("Prompt adjusted: %s", adjusted[:200])
-        return adjusted
-
-    def _reroll_prompt(self, input_data: dict) -> str:
-        """Use LLM to generate a completely fresh prompt from input data."""
-        response = self.adj_client.chat.completions.create(
-            model="gpt-5.4",
-            messages=[
-                {"role": "system", "content": REROLL_SYSTEM_PROMPT},
-                {"role": "user", "content": (
-                    f"Generate a badge prompt using this data:\n"
-                    f"{json.dumps(input_data, indent=2)}\n\n"
-                    f"Return ONLY the prompt text:"
-                )},
-            ],
-            max_completion_tokens=2000,
-        )
-        rerolled = response.choices[0].message.content.strip()
-        logger.info("Prompt rerolled: %s", rerolled[:200])
-        return rerolled
+        logger.info("Saved to %s", path)
