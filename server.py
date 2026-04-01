@@ -14,6 +14,8 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from eval_client import EvalClient
+from orchestrator import Orchestrator
 from reference_store import pick_references, ReferenceImage
 from seedream_sdk import SeedreamClient, SeedreamAPIError
 
@@ -322,6 +324,56 @@ async def generate_sweep(
         "failed": len(errors),
         "results": results,
         "errors": errors,
+    }
+
+
+@app.post("/api/orchestrate")
+async def orchestrate(
+    input_json: str = Form(...),
+    anchor_photo: UploadFile | None = File(None),
+):
+    """Run full orchestration pipeline: photo analysis → keywords → prompt → generate → eval → retry."""
+    try:
+        input_data = json.loads(input_json)
+    except json.JSONDecodeError as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid JSON: {e}"})
+
+    # Save uploaded photo to temp file if provided
+    if anchor_photo:
+        photo_bytes = await anchor_photo.read()
+        photo_path = os.path.join(OUTPUT_DIR, "temp_anchor_photo.jpg")
+        with open(photo_path, "wb") as f:
+            f.write(photo_bytes)
+        input_data["anchor_photo"] = photo_path
+
+    try:
+        orch = Orchestrator(
+            seedream_client=client,
+            eval_client=EvalClient(),
+        )
+        result = orch.run(input_data)
+    except Exception as e:
+        logger.error("Orchestration error: %s", e)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    image_b64 = ""
+    if result.image:
+        image_b64 = f"data:image/jpeg;base64,{base64.b64encode(result.image).decode()}"
+
+    return {
+        "passed": result.passed,
+        "score": result.score,
+        "rounds": result.rounds,
+        "image": image_b64,
+        "eval_history": [
+            {
+                "total_score": ev.total_score,
+                "dimensions": ev.dimensions,
+                "issues": ev.issues,
+                "suggestion": ev.suggestion,
+            }
+            for ev in result.eval_history
+        ],
     }
 
 

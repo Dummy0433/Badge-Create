@@ -239,6 +239,15 @@ class Orchestrator:
                 passed=False, total_score=0.0, suggestion="Generation failed"
             )
 
+        # Save intermediate image for debugging
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join("output", f"{ts}_round{round_num}_s{seed}.jpg")
+        os.makedirs("output", exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(image)
+        logger.info("Round %d: saved to %s", round_num, path)
+
         good_refs, bad_refs = pick_eval_references()
         eval_result = self.eval.evaluate(
             generated_image=image,

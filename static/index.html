@@ -79,8 +79,37 @@
         <h1>Seedream 4.5 Test UI</h1>
 
         <div class="form-section">
-            <h2>Prompt</h2>
-            <textarea id="prompt" placeholder="Enter your prompt here...">C4D Badge, 3D Pixar realistic cartoon style. A large plump rounded solid 3D heart shape as the background carrier, the heart is thick and voluminous like soft candy or jelly, smooth glossy surface with gradient pink-to-magenta color, NOT a balloon NOT inflatable, no wrinkles no seams no strings, just a clean solid puffy 3D heart object. A man character with dark black side-parted short hair, deep brown eyes, gentle smile, wearing a light blue crew neck top, the character is positioned in front of the upper area of the heart from chest up, occupying 70% of the heart. Small hand-drawn graffiti-style outline hearts and love doodles floating around the heart in the air as decorative elements. 3D bold thick retro cursive gradient text "Wells" at the bottom of the heart, partially extending beyond the heart edge, the text has silver chrome sweep light effect, holographic iridescent metallic material. Warm side light from left, cool side light from right, soft front key light. Pure black background, candy color palette, commercial art illustration style.</textarea>
+            <h2>Orchestrator Input (JSON + Photo)</h2>
+            <textarea id="inputJson" style="height:200px; font-family:monospace; font-size:12px;">{
+  "slogan": "Diedriht",
+  "community_type": "host",
+  "slogan_lang": "Spanish",
+  "anchor_info": {
+    "anchor": {
+      "nick_name": "Diedriht🐰Mayorga🇳🇮🇨🇷",
+      "bio_description": "Bienvenidos ami live"
+    },
+    "anchor_characterization": "Diedriht is a Spanish-speaking anchor who hosts highly interactive and informal streams. His content consists of lively, humorous conversations and playful banter with viewers. Visually characterized by use of TikTok face filters like devil horns. Overall vibe is friendly, engaging, and comedic.",
+    "brand_palette": {
+      "primary": {"name": "Black", "hex": "#000000"},
+      "secondary": {"name": "Red", "hex": "#FF0000"},
+      "tertiary": {"name": "White", "hex": "#FFFFFF"}
+    }
+  }
+}</textarea>
+            <div style="margin-top: 8px;">
+                <label for="anchor_photo">Anchor Photo</label>
+                <input type="file" id="anchor_photo" accept="image/*">
+            </div>
+            <button class="btn" style="background:#059669; margin-top:12px;" id="orchestrateBtn" onclick="runOrchestrate()">Orchestrate (Full Pipeline)</button>
+            <span class="hint" style="margin-left:8px;">Photo analysis → Keywords → Prompt → Generate → Eval → Retry</span>
+        </div>
+
+        <div class="form-section">
+            <h2 class="collapsible" onclick="toggleCollapse(this)">Manual Prompt (Advanced)</h2>
+            <div class="collapse-content">
+                <textarea id="prompt" placeholder="Enter manual prompt for direct Seedream generation..."></textarea>
+            </div>
         </div>
 
         <div class="form-section">
@@ -249,8 +278,9 @@
         }
 
         function disableAllBtns(disabled) {
-            ['generateBtn', 'batchBtn', 'sweepBtn'].forEach(id => {
-                document.getElementById(id).disabled = disabled;
+            ['generateBtn', 'batchBtn', 'sweepBtn', 'orchestrateBtn'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = disabled;
             });
         }
 
@@ -447,6 +477,87 @@
             } catch (e) {
                 if (e.name === 'AbortError') {
                     content.innerHTML = `<div class="error">Request timed out. Try fewer parameter combinations.</div>`;
+                } else {
+                    content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
+                }
+            } finally {
+                clearInterval(progressTimer);
+                disableAllBtns(false);
+            }
+        }
+
+        // --- Orchestrate full pipeline ---
+        async function runOrchestrate() {
+            const section = document.getElementById('resultSection');
+            const content = document.getElementById('resultContent');
+
+            let inputJson;
+            try {
+                inputJson = JSON.parse(document.getElementById('inputJson').value);
+            } catch(e) {
+                alert('Invalid JSON: ' + e.message);
+                return;
+            }
+
+            const photoFile = document.getElementById('anchor_photo').files[0];
+
+            disableAllBtns(true);
+            section.classList.add('visible');
+            const startTime = Date.now();
+            content.innerHTML = '<div class="loading">Running orchestration pipeline...</div>';
+            const progressTimer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const min = Math.floor(elapsed / 60);
+                const sec = elapsed % 60;
+                const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
+                content.innerHTML = `<div class="loading">Orchestrating... ${timeStr} elapsed</div>`;
+            }, 2000);
+
+            const formData = new FormData();
+            formData.append('input_json', JSON.stringify(inputJson));
+            if (photoFile) {
+                formData.append('anchor_photo', photoFile);
+            }
+
+            try {
+                const resp = await fetch('/api/orchestrate', {
+                    method: 'POST', body: formData,
+                    signal: AbortSignal.timeout(300000),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    content.innerHTML = `<div class="error">${data.error || 'Unknown error'}</div>`;
+                    return;
+                }
+
+                let html = '';
+                html += `<div class="batch-summary">`;
+                html += `<strong>${data.passed ? 'PASSED' : 'BEST EFFORT'}</strong> `;
+                html += `Score: ${data.score} | Rounds: ${data.rounds}`;
+                html += `</div>`;
+
+                if (data.image) {
+                    html += `<div class="result-images"><img src="${data.image}" alt="Result"></div>`;
+                }
+
+                if (data.eval_history && data.eval_history.length > 0) {
+                    html += `<div style="margin-top:12px;">`;
+                    for (let i = 0; i < data.eval_history.length; i++) {
+                        const ev = data.eval_history[i];
+                        html += `<span class="collapsible" onclick="toggleCollapse(this)">Round ${i}: score=${ev.total_score}</span>`;
+                        html += `<div class="collapse-content"><div class="llm-result">`;
+                        html += `Dimensions: ${JSON.stringify(ev.dimensions, null, 2)}\n`;
+                        if (ev.issues.length) html += `Issues: ${ev.issues.join(', ')}\n`;
+                        if (ev.suggestion) html += `Suggestion: ${ev.suggestion}`;
+                        html += `</div></div>`;
+                    }
+                    html += `</div>`;
+                }
+
+                content.innerHTML = html;
+            } catch (e) {
+                if (e.name === 'TimeoutError') {
+                    content.innerHTML = `<div class="error">Request timed out (5min).</div>`;
                 } else {
                     content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
                 }

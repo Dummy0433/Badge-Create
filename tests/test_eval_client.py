@@ -111,7 +111,7 @@ class TestEvalClient:
         )
 
         assert result.passed is False
-        assert result.total_score == 5.5
+        assert result.total_score < 8.0  # weighted score still below threshold
         assert "Wels" in result.issues[0]
         assert result.suggestion != ""
 

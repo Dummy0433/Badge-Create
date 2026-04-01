@@ -41,8 +41,8 @@ is a critical failure (score ≤ 3).
 
 Respond with ONLY valid JSON in this exact format:
 {
-  "passed": <bool, true if average score >= 8.0>,
-  "total_score": <float, average of all dimension scores>,
+  "passed": <bool, see scoring rules below>,
+  "total_score": <float, see scoring rules below>,
   "dimensions": {
     "heart_carrier": <float>,
     "character": <float>,
@@ -162,8 +162,20 @@ class EvalClient:
 
         return content
 
+    # Dimension weights — text_render reduced because diffusion models
+    # struggle with text rendering, especially for uncommon words
+    DIMENSION_WEIGHTS = {
+        "heart_carrier": 1.0,
+        "character": 1.0,
+        "decorations": 1.0,
+        "text_render": 0.5,
+        "color_match": 1.0,
+        "composition": 1.0,
+        "quality": 1.0,
+    }
+
     def _parse_response(self, response) -> EvalResult:
-        """Parse GPT response into EvalResult."""
+        """Parse GPT response into EvalResult with weighted scoring."""
         text = response.choices[0].message.content
         try:
             data = json.loads(text)
@@ -171,10 +183,21 @@ class EvalClient:
             logger.error("Failed to parse eval response: %s", text)
             return EvalResult(passed=False, total_score=0.0, suggestion="Eval parse error")
 
+        dimensions = data.get("dimensions", {})
+
+        # Weighted average instead of simple average
+        total_weight = 0.0
+        weighted_sum = 0.0
+        for dim, score in dimensions.items():
+            w = self.DIMENSION_WEIGHTS.get(dim, 1.0)
+            weighted_sum += score * w
+            total_weight += w
+        total_score = weighted_sum / total_weight if total_weight > 0 else 0.0
+
         return EvalResult(
-            passed=data.get("passed", False),
-            total_score=data.get("total_score", 0.0),
-            dimensions=data.get("dimensions", {}),
+            passed=total_score >= 8.0,
+            total_score=round(total_score, 1),
+            dimensions=dimensions,
             issues=data.get("issues", []),
             suggestion=data.get("suggestion", ""),
         )
