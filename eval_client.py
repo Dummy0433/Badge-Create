@@ -17,43 +17,46 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 EVAL_SYSTEM_PROMPT = """\
-You are a quality evaluator for AI-generated badge images. You evaluate a generated \
-image against specific criteria and reference examples.
+You are a quality evaluator for AI-generated badge images.
 
-Score each dimension from 1-10:
-- heart_carrier: Is there a large plump 3D heart shape? Correct material (candy/jelly, \
-glossy surface)? Correct color from brand palette?
-- character: Does the person match the described appearance (hair, eyes, expression)? \
-Positioned chest-up, occupying ~70% of the heart?
-- decorations: Are there appropriate floating decorative elements matching the \
-anchor's personality/themes?
-- text_render: Does the text content EXACTLY match the required text_output value? \
-Is it metallic material? Positioned at the bottom?
-- color_match: Do the heart color, text accents, and decorations match the \
-brand_palette colors provided?
-- composition: Overall layout correct? Background is the specified color? \
-Character properly framed?
-- quality: No artifacts, deformed limbs, blurry areas, or visual glitches?
+## Hard Gates (pass/fail)
 
-IMPORTANT for text_render: The text in the image MUST exactly match the \
-"text_output" value from the criteria. Any misspelling or missing characters \
-is a critical failure (score ≤ 3).
+Check these FIRST. If either fails, the image is rejected regardless of scores.
 
-Respond with ONLY valid JSON in this exact format:
+- background_black: Is the background SOLID BLACK? Any visible gradient, glow, \
+color cast, or non-black area → false.
+- heart_shape_clean: Is the heart a CLEAN rounded 3D shape? Any attached \
+protrusions (horns, wings, tails, extra shapes growing FROM the heart) → false. \
+Floating decorative elements near but NOT attached to the heart are OK.
+
+## Scored Dimensions (1-10 each)
+
+- character_likeness: Compare the generated character to the provided anchor photo. \
+Does the character resemble the actual person? Check: gender, hair style/color, \
+facial features (beard, glasses, moles, skin tone), age impression, expression. \
+If no anchor photo is provided, evaluate against the text description only.
+- heart_quality: Is the heart material candy/jelly with glossy surface (NOT balloon \
+or plastic)? Does it occupy ~80% of the canvas? Is the color from the brand palette?
+- decoration_harmony: Are decorations restrained and visually unified? Prefer \
+single-color or minimal-color doodle/outline style. Penalize: too many different \
+materials, too many colors, overcrowded elements competing with the character.
+- composition: Character framed chest-up occupying ~70% of heart? Text present \
+at bottom (not oversized, not obscuring character)? Overall visual balance good?
+
+Respond with ONLY valid JSON:
 {
-  "passed": <bool, see scoring rules below>,
-  "total_score": <float, see scoring rules below>,
+  "hard_gates": {
+    "background_black": <bool>,
+    "heart_shape_clean": <bool>
+  },
   "dimensions": {
-    "heart_carrier": <float>,
-    "character": <float>,
-    "decorations": <float>,
-    "text_render": <float>,
-    "color_match": <float>,
-    "composition": <float>,
-    "quality": <float>
+    "character_likeness": <float>,
+    "heart_quality": <float>,
+    "decoration_harmony": <float>,
+    "composition": <float>
   },
   "issues": [<list of specific problems found, empty if none>],
-  "suggestion": "<targeted prompt adjustment suggestion to fix issues, empty if passed>"
+  "suggestion": "<targeted fix suggestion, empty if passed>"
 }"""
 
 
@@ -81,13 +84,14 @@ class EvalClient:
         input_data: dict,
         good_refs: list[EvalReference],
         bad_refs: list[EvalReference],
+        anchor_photo: bytes | None = None,
     ) -> EvalResult:
         """Evaluate a generated image against criteria and references."""
         user_content = self._build_user_message(
-            generated_image, input_data, good_refs, bad_refs
+            generated_image, input_data, good_refs, bad_refs, anchor_photo
         )
 
-        logger.info("Calling GPT-5.4 eval: text_output=%s", input_data.get("text_output"))
+        logger.info("Calling eval: text_output=%s", input_data.get("text_output"))
 
         response = self.client.chat.completions.create(
             model=self.model,
@@ -107,6 +111,7 @@ class EvalClient:
         input_data: dict,
         good_refs: list[EvalReference],
         bad_refs: list[EvalReference],
+        anchor_photo: bytes | None = None,
     ) -> list[dict]:
         """Build multimodal user message with images and criteria."""
         content = []
@@ -114,13 +119,24 @@ class EvalClient:
         criteria = {
             "text_output": input_data.get("text_output", ""),
             "brand_palette": input_data.get("brand_palette", {}),
-            "photo_analysis": input_data.get("photo_analysis", {}),
             "anchor_characterization": input_data.get("anchor_characterization", ""),
         }
         content.append({
             "type": "text",
             "text": f"## Evaluation Criteria\n{json.dumps(criteria, indent=2)}",
         })
+
+        if anchor_photo:
+            content.append({
+                "type": "text",
+                "text": "## Anchor photo — the character should resemble this person",
+            })
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{base64.b64encode(anchor_photo).decode()}"
+                },
+            })
 
         for ref in good_refs:
             content.append({
@@ -162,20 +178,8 @@ class EvalClient:
 
         return content
 
-    # Dimension weights — text_render reduced because diffusion models
-    # struggle with text rendering, especially for uncommon words
-    DIMENSION_WEIGHTS = {
-        "heart_carrier": 1.0,
-        "character": 1.0,
-        "decorations": 1.0,
-        "text_render": 0.5,
-        "color_match": 1.0,
-        "composition": 1.0,
-        "quality": 1.0,
-    }
-
     def _parse_response(self, response) -> EvalResult:
-        """Parse GPT response into EvalResult with weighted scoring."""
+        """Parse GPT response: check hard gates, then compute score from dimensions."""
         text = response.choices[0].message.content
         try:
             data = json.loads(text)
@@ -183,21 +187,29 @@ class EvalClient:
             logger.error("Failed to parse eval response: %s", text)
             return EvalResult(passed=False, total_score=0.0, suggestion="Eval parse error")
 
+        hard_gates = data.get("hard_gates", {})
         dimensions = data.get("dimensions", {})
+        issues = data.get("issues", [])
+        suggestion = data.get("suggestion", "")
 
-        # Weighted average instead of simple average
-        total_weight = 0.0
-        weighted_sum = 0.0
-        for dim, score in dimensions.items():
-            w = self.DIMENSION_WEIGHTS.get(dim, 1.0)
-            weighted_sum += score * w
-            total_weight += w
-        total_score = weighted_sum / total_weight if total_weight > 0 else 0.0
+        # Hard gate failure → instant reject
+        if not hard_gates.get("background_black", True) or not hard_gates.get("heart_shape_clean", True):
+            return EvalResult(
+                passed=False,
+                total_score=0.0,
+                dimensions=dimensions,
+                issues=issues,
+                suggestion=suggestion,
+            )
+
+        # Simple average of 4 dimensions
+        scores = list(dimensions.values())
+        total_score = sum(scores) / len(scores) if scores else 0.0
 
         return EvalResult(
             passed=total_score >= 8.0,
             total_score=round(total_score, 1),
             dimensions=dimensions,
-            issues=data.get("issues", []),
-            suggestion=data.get("suggestion", ""),
+            issues=issues,
+            suggestion=suggestion,
         )
