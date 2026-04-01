@@ -241,6 +241,7 @@ class Orchestrator:
                 input_data=input_data,
                 good_refs=good_refs,
                 bad_refs=bad_refs,
+                anchor_photo=photo_bytes,
             )
             logger.info("Round %d: seed=%d score=%.1f", round_num, seed, eval_result.total_score)
             return UnitResult(
