@@ -56,6 +56,7 @@ class SeedreamClient:
         negative_prompt: str = "nsfw",
         seed: int = -1,
         force_single: bool = True,
+        cot_mode: str = "enable",
         **kwargs,
     ) -> SeedreamResponse:
         conf = {
@@ -67,6 +68,7 @@ class SeedreamClient:
             "height": height,
             "seed": seed,
             "force_single": force_single,
+            "cot_mode": cot_mode,
             **kwargs,
         }
 
@@ -103,32 +105,46 @@ class SeedreamClient:
                 raw_response=body,
             )
 
-        # Extract metadata from resp_json if available
-        resp_json_str = body.get("data", {}).get("resp_json", "{}")
-        try:
-            resp_json = json.loads(resp_json_str) if isinstance(resp_json_str, str) else resp_json_str
-        except json.JSONDecodeError:
-            resp_json = {}
-
-        # Extract images from afr_data
+        # Extract images and metadata from afr_data
+        # Each afr_data item is a dict with:
+        #   - "pic": base64-encoded JPEG image
+        #   - "pic_conf": JSON string with llm_result, request_id, seed, etc.
         raw_images = []
+        llm_result = ""
+        image_prompts = []
+        request_id = ""
+
         afr_data = body.get("data", {}).get("afr_data", [])
         for item in afr_data:
-            if isinstance(item, str):
-                raw_images.append(base64.b64decode(item))
-            elif isinstance(item, dict) and "binary" in item:
-                raw_images.append(base64.b64decode(item["binary"]))
+            if isinstance(item, dict):
+                # Extract image from "pic" field
+                pic_b64 = item.get("pic", "")
+                if pic_b64:
+                    raw_images.append(base64.b64decode(pic_b64))
 
-        # Also check binary_data field
-        binary_data = body.get("data", {}).get("binary_data", [])
-        for item in binary_data:
-            if isinstance(item, str):
+                # Extract metadata from "pic_conf" field
+                pic_conf_str = item.get("pic_conf", "")
+                if pic_conf_str:
+                    try:
+                        pic_conf = json.loads(pic_conf_str)
+                        if not llm_result:
+                            llm_result = pic_conf.get("llm_result", "")
+                        if not request_id:
+                            request_id = pic_conf.get("request_id", "")
+                    except json.JSONDecodeError:
+                        pass
+            elif isinstance(item, str):
+                # Fallback: treat as raw base64 image
                 raw_images.append(base64.b64decode(item))
+
+        # Fallback request_id from extra.log_id
+        if not request_id:
+            request_id = body.get("extra", {}).get("log_id", "")
 
         return SeedreamResponse(
             images=raw_images,
-            llm_result=resp_json.get("llm_result", ""),
-            image_prompts=resp_json.get("image_prompt", []),
-            request_id=resp_json.get("request_id", body.get("extra", {}).get("log_id", "")),
+            llm_result=llm_result,
+            image_prompts=image_prompts,
+            request_id=request_id,
             raw_response=body,
         )

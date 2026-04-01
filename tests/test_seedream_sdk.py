@@ -125,22 +125,31 @@ class TestSeedreamClientResponseParsing:
 
     @patch("seedream_sdk.requests.post")
     def test_parse_response_success(self, mock_post):
-        """Test that response parsing correctly extracts images, llm_result, and request_id."""
+        """Test that response parsing correctly extracts images from afr_data[].pic format."""
         fake_image = b"\xff\xd8\xff\xe0fake-jpeg"
         encoded_image = base64.b64encode(fake_image).decode()
+
+        pic_conf = json.dumps({
+            "llm_result": "A cute orange cat",
+            "request_id": "req-456",
+            "seed": 12345,
+        })
 
         resp = MagicMock()
         resp.status_code = 200
         resp.json.return_value = {
             "status_code": 0,
             "data": {
-                "afr_data": [encoded_image],
-                "resp_json": json.dumps({
-                    "llm_result": "A cute orange cat",
-                    "image_prompt": ["detailed cat prompt"],
-                    "request_id": "req-456",
-                }),
-                "binary_data": [],
+                "afr_data": [
+                    {
+                        "mask_area": 0,
+                        "mask_ratio": 0,
+                        "pic": encoded_image,
+                        "algorithm": "tt_vlm_high_aes_scheduler",
+                        "pic_conf": pic_conf,
+                        "pics": None,
+                    }
+                ],
             },
             "extra": {"log_id": "log-abc"},
         }
@@ -152,5 +161,4 @@ class TestSeedreamClientResponseParsing:
         assert len(result.images) == 1
         assert result.images[0] == fake_image
         assert result.llm_result == "A cute orange cat"
-        assert result.image_prompts == ["detailed cat prompt"]
         assert result.request_id == "req-456"

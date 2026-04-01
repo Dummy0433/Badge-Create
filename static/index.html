@@ -7,7 +7,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
-        .container { max-width: 900px; margin: 0 auto; }
+        .container { max-width: 1200px; margin: 0 auto; }
         h1 { margin-bottom: 20px; font-size: 24px; }
 
         .form-section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
@@ -19,6 +19,7 @@
         input[type="file"] { font-size: 14px; }
 
         .params-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 8px; }
+        .params-grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin-top: 8px; }
         .param-group { display: flex; flex-direction: column; }
 
         .checkbox-group { display: flex; align-items: center; gap: 6px; margin-top: 20px; }
@@ -27,6 +28,14 @@
         .btn { display: inline-block; padding: 12px 32px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
         .btn:hover { background: #1d4ed8; }
         .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+        .btn-group { display: flex; gap: 8px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+        .btn-secondary { display: inline-block; padding: 12px 32px; background: #7c3aed; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .btn-secondary:hover { background: #6d28d9; }
+        .btn-secondary:disabled { background: #94a3b8; cursor: not-allowed; }
+        .btn-sweep { display: inline-block; padding: 12px 32px; background: #059669; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .btn-sweep:hover { background: #047857; }
+        .btn-sweep:disabled { background: #94a3b8; cursor: not-allowed; }
+        .batch-count-input { width: 60px; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; text-align: center; }
 
         .result-section { background: #fff; border-radius: 8px; padding: 20px; margin-top: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: none; }
         .result-section.visible { display: block; }
@@ -35,7 +44,21 @@
         .result-images { display: flex; flex-wrap: wrap; gap: 12px; }
         .result-images img { max-width: 100%; border-radius: 6px; border: 1px solid #eee; }
 
-        .llm-result { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 12px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+        .batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+        .batch-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
+        .batch-card img { width: 100%; border-radius: 6px; }
+        .card-meta { font-size: 11px; color: #888; margin-top: 6px; word-break: break-all; }
+        .card-params { font-size: 11px; color: #2563eb; background: #eff6ff; border-radius: 4px; padding: 4px 8px; margin-top: 6px; font-family: monospace; }
+        .batch-summary { font-size: 13px; color: #666; margin-bottom: 12px; }
+        .batch-errors { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; }
+
+        .collapsible { cursor: pointer; user-select: none; }
+        .collapsible::before { content: '\25B6 '; font-size: 10px; }
+        .collapsible.open::before { content: '\25BC '; }
+        .collapse-content { display: none; }
+        .collapse-content.open { display: block; }
+
+        .llm-result { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
 
         .loading { text-align: center; padding: 40px; font-size: 16px; color: #666; }
         .loading::after { content: ''; display: inline-block; width: 20px; height: 20px; border: 3px solid #ddd; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 10px; vertical-align: middle; }
@@ -46,6 +69,9 @@
         .raw-toggle { font-size: 12px; color: #2563eb; cursor: pointer; margin-top: 8px; display: inline-block; }
         .raw-content { display: none; background: #f1f5f9; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 12px; font-family: monospace; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
         .raw-content.visible { display: block; }
+
+        .hint { font-size: 11px; color: #999; margin-top: 2px; }
+        .combo-count { font-size: 13px; color: #059669; font-weight: 600; margin-left: 12px; }
     </style>
 </head>
 <body>
@@ -54,7 +80,7 @@
 
         <div class="form-section">
             <h2>Prompt</h2>
-            <textarea id="prompt" placeholder="Enter your prompt here..."></textarea>
+            <textarea id="prompt" placeholder="Enter your prompt here...">C4D Badge, 3D Pixar realistic cartoon style. A large plump rounded solid 3D heart shape as the background carrier, the heart is thick and voluminous like soft candy or jelly, smooth glossy surface with gradient pink-to-magenta color, NOT a balloon NOT inflatable, no wrinkles no seams no strings, just a clean solid puffy 3D heart object. A man character with dark black side-parted short hair, deep brown eyes, gentle smile, wearing a light blue crew neck top, the character is positioned in front of the upper area of the heart from chest up, occupying 70% of the heart. Small hand-drawn graffiti-style outline hearts and love doodles floating around the heart in the air as decorative elements. 3D bold thick retro cursive gradient text "Wells" at the bottom of the heart, partially extending beyond the heart edge, the text has silver chrome sweep light effect, holographic iridescent metallic material. Warm side light from left, cool side light from right, soft front key light. Pure black background, candy color palette, commercial art illustration style.</textarea>
         </div>
 
         <div class="form-section">
@@ -76,7 +102,7 @@
             <div class="params-grid" style="margin-top: 12px;">
                 <div class="param-group" style="grid-column: span 2;">
                     <label for="negative_prompt">Negative Prompt</label>
-                    <input type="text" id="negative_prompt" value="nsfw">
+                    <input type="text" id="negative_prompt" value="nsfw, balloon, inflatable, wrinkles, seams, strings, rope, flat, 2D, thin, metal frame, hard border, badge pin, deflated">
                 </div>
                 <div class="param-group">
                     <div class="checkbox-group">
@@ -92,7 +118,62 @@
             <input type="file" id="ref_images" multiple accept="image/*">
         </div>
 
-        <button class="btn" id="generateBtn" onclick="generate()">Generate</button>
+        <div class="form-section">
+            <h2>Few-Shot Style References</h2>
+            <div class="checkbox-group" style="margin-bottom: 12px;">
+                <input type="checkbox" id="use_refs">
+                <label for="use_refs" style="margin: 0;">Inject reference images (bypass VLM, use custom PE)</label>
+            </div>
+            <div id="refsOptions" style="display:none;">
+                <div class="params-grid">
+                    <div class="param-group">
+                        <label for="ref_count">Reference Count (randomly picked)</label>
+                        <input type="number" id="ref_count" value="2" min="1" max="3">
+                    </div>
+                </div>
+                <div id="refPreview" style="margin-top: 12px;"></div>
+                <button type="button" style="margin-top:8px; padding:6px 16px; font-size:12px; cursor:pointer; border:1px solid #ddd; border-radius:4px; background:#fff;" onclick="previewRefs()">Preview references</button>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h2>Parameter Sweep</h2>
+            <p class="hint" style="margin-bottom: 12px;">Comma-separated values. All combinations will be generated (cartesian product).</p>
+            <div class="params-grid-4">
+                <div class="param-group">
+                    <label for="sweep_gs">Guidance Scale</label>
+                    <input type="text" id="sweep_gs" value="8.0">
+                    <span class="hint">[1.0 - 10.0] T2I text strength</span>
+                </div>
+                <div class="param-group">
+                    <label for="sweep_cfg">CFG Rescale</label>
+                    <input type="text" id="sweep_cfg" value="0.0">
+                    <span class="hint">[0.0 - 1.0]</span>
+                </div>
+                <div class="param-group">
+                    <label for="sweep_tw">Edit Text Weight</label>
+                    <input type="text" id="sweep_tw" value="2.0">
+                    <span class="hint">[1.0 - 10.0] I2I only</span>
+                </div>
+                <div class="param-group">
+                    <label for="sweep_iw">Edit Image Weight</label>
+                    <input type="text" id="sweep_iw" value="1.0">
+                    <span class="hint">[1.0 - 10.0] I2I only</span>
+                </div>
+            </div>
+            <div style="margin-top: 8px;">
+                <span class="hint">Total combinations: </span><span class="combo-count" id="comboCount">-</span>
+                <span class="hint" style="margin-left:8px;">Est. time: </span><span class="combo-count" id="comboTime" style="color:#b45309;">-</span>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn" id="generateBtn" onclick="generate()">Generate</button>
+            <button class="btn-secondary" id="batchBtn" onclick="generateBatch()">Batch Generate</button>
+            <label style="font-size:13px; color:#555;">Count:</label>
+            <input type="number" class="batch-count-input" id="batchCount" value="10" min="1">
+            <button class="btn-sweep" id="sweepBtn" onclick="generateSweep()">Sweep</button>
+        </div>
 
         <div class="result-section" id="resultSection">
             <h2>Result</h2>
@@ -101,18 +182,141 @@
     </div>
 
     <script>
+        // Toggle helpers
+        document.getElementById('use_refs').addEventListener('change', function() {
+            document.getElementById('refsOptions').style.display = this.checked ? 'block' : 'none';
+        });
+
+        function appendRefFields(formData) {
+            const useRefs = document.getElementById('use_refs').checked;
+            formData.append('use_refs', useRefs);
+            if (useRefs) {
+                formData.append('ref_count', document.getElementById('ref_count').value);
+            }
+        }
+
+        async function previewRefs() {
+            const count = document.getElementById('ref_count').value;
+            const preview = document.getElementById('refPreview');
+            preview.innerHTML = '<div style="color:#999;font-size:12px;">Loading...</div>';
+            try {
+                const resp = await fetch(`/api/references?count=${count}`);
+                const refs = await resp.json();
+                let html = '';
+                refs.forEach((ref, i) => {
+                    html += `<div style="margin-bottom:8px; padding:8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px;">`;
+                    html += `<div style="font-size:12px; font-weight:600; color:#2563eb;">input${i+1}: ${ref.filename}</div>`;
+                    html += `<div style="font-size:11px; color:#666; margin-top:4px;">${ref.description}</div>`;
+                    html += `</div>`;
+                });
+                preview.innerHTML = html;
+            } catch(e) {
+                preview.innerHTML = `<div style="color:#dc2626;font-size:12px;">Failed: ${e.message}</div>`;
+            }
+        }
+
+        function appendFiles(formData) {
+            const fileInput = document.getElementById('ref_images');
+            for (const file of fileInput.files) {
+                formData.append('files', file);
+            }
+        }
+
+        function parseCSV(s) { return s.split(',').map(x => x.trim()).filter(x => x); }
+
+        function updateComboCount() {
+            const gs = parseCSV(document.getElementById('sweep_gs').value).length || 1;
+            const cfg = parseCSV(document.getElementById('sweep_cfg').value).length || 1;
+            const tw = parseCSV(document.getElementById('sweep_tw').value).length || 1;
+            const iw = parseCSV(document.getElementById('sweep_iw').value).length || 1;
+            const total = gs * cfg * tw * iw;
+            document.getElementById('comboCount').textContent = total;
+            // 10 concurrent, ~20s per request
+            const estSec = Math.ceil(total / 10) * 20;
+            const estMin = Math.floor(estSec / 60);
+            const estRemSec = estSec % 60;
+            document.getElementById('comboTime').textContent =
+                estMin > 0 ? `~${estMin}m${estRemSec > 0 ? estRemSec + 's' : ''}` : `~${estSec}s`;
+        }
+        ['sweep_gs', 'sweep_cfg', 'sweep_tw', 'sweep_iw'].forEach(id => {
+            document.getElementById(id).addEventListener('input', updateComboCount);
+        });
+        updateComboCount();
+
+        function toggleCollapse(el) {
+            el.classList.toggle('open');
+            el.nextElementSibling.classList.toggle('open');
+        }
+
+        function disableAllBtns(disabled) {
+            ['generateBtn', 'batchBtn', 'sweepBtn'].forEach(id => {
+                document.getElementById(id).disabled = disabled;
+            });
+        }
+
+        // --- Render helpers ---
+
+        function renderCardParams(params) {
+            if (!params) return '';
+            const parts = [];
+            if (params.guidance_scale !== undefined) parts.push(`gs=${params.guidance_scale}`);
+            if (params.cfg_rescale_factor !== undefined) parts.push(`cfg=${params.cfg_rescale_factor}`);
+            if (params.single_edit_guidance_weight !== undefined) parts.push(`tw=${params.single_edit_guidance_weight}`);
+            if (params.single_edit_guidance_weight_image !== undefined) parts.push(`iw=${params.single_edit_guidance_weight_image}`);
+            return parts.length ? `<div class="card-params">${parts.join(' | ')}</div>` : '';
+        }
+
+        function renderPE(llmResult, id) {
+            if (!llmResult) return '';
+            return `<span class="collapsible" onclick="toggleCollapse(this)">PE</span>` +
+                   `<div class="collapse-content"><div class="llm-result">${llmResult}</div></div>`;
+        }
+
+        function renderBatchCard(r) {
+            let html = `<div class="batch-card">`;
+            for (const img of r.images) {
+                html += `<img src="${img}" alt="generated">`;
+            }
+            html += renderCardParams(r.params);
+            html += `<div class="card-meta">Seed: ${r.seed} | ID: ${r.request_id}</div>`;
+            html += renderPE(r.llm_result);
+            html += `</div>`;
+            return html;
+        }
+
+        function renderBatchResults(data) {
+            let html = '';
+            html += `<div class="batch-summary"><strong>${data.success}</strong> / ${data.total} succeeded`;
+            if (data.failed > 0) html += `, <strong style="color:#dc2626">${data.failed} failed</strong>`;
+            html += `</div>`;
+
+            if (data.errors && data.errors.length > 0) {
+                html += `<div class="batch-errors">`;
+                for (const err of data.errors) {
+                    const label = err.seed !== undefined ? `Seed ${err.seed}` : JSON.stringify(err.params || {});
+                    html += `${label}: ${err.error}<br>`;
+                }
+                html += `</div>`;
+            }
+
+            if (data.results && data.results.length > 0) {
+                html += '<div class="batch-grid">';
+                for (const r of data.results) {
+                    html += renderBatchCard(r);
+                }
+                html += '</div>';
+            }
+            return html;
+        }
+
+        // --- Generate single ---
         async function generate() {
-            const btn = document.getElementById('generateBtn');
             const section = document.getElementById('resultSection');
             const content = document.getElementById('resultContent');
             const prompt = document.getElementById('prompt').value.trim();
+            if (!prompt) { alert('Please enter a prompt'); return; }
 
-            if (!prompt) {
-                alert('Please enter a prompt');
-                return;
-            }
-
-            btn.disabled = true;
+            disableAllBtns(true);
             section.classList.add('visible');
             content.innerHTML = '<div class="loading">Generating...</div>';
 
@@ -123,52 +327,132 @@
             formData.append('seed', document.getElementById('seed').value);
             formData.append('negative_prompt', document.getElementById('negative_prompt').value);
             formData.append('force_single', document.getElementById('force_single').checked);
-
-            const fileInput = document.getElementById('ref_images');
-            for (const file of fileInput.files) {
-                formData.append('files', file);
-            }
+            appendRefFields(formData);
+            appendFiles(formData);
 
             try {
                 const resp = await fetch('/api/generate', { method: 'POST', body: formData });
                 const data = await resp.json();
-
                 if (!resp.ok) {
                     content.innerHTML = `<div class="error">${data.error || 'Unknown error'}\n\n${JSON.stringify(data.raw_response || {}, null, 2)}</div>`;
                     return;
                 }
 
-                let html = '';
-                html += `<div class="result-meta"><strong>Request ID:</strong> ${data.request_id}</div>`;
-
+                let html = `<div class="result-meta"><strong>Request ID:</strong> ${data.request_id}</div>`;
                 if (data.images && data.images.length > 0) {
                     html += '<div class="result-images">';
-                    for (const img of data.images) {
-                        html += `<img src="${img}" alt="Generated image">`;
-                    }
+                    for (const img of data.images) html += `<img src="${img}" alt="Generated image">`;
                     html += '</div>';
                 } else {
                     html += '<div class="error">No images returned</div>';
                 }
-
-                if (data.llm_result) {
-                    html += `<div class="result-meta" style="margin-top:12px;"><strong>PE Rewrite:</strong></div>`;
-                    html += `<div class="llm-result">${data.llm_result}</div>`;
-                }
-
-                if (data.image_prompts && data.image_prompts.length > 0) {
-                    html += `<div class="result-meta" style="margin-top:12px;"><strong>Image Prompts:</strong></div>`;
-                    html += `<div class="llm-result">${data.image_prompts.join('\n\n')}</div>`;
-                }
-
+                html += renderPE(data.llm_result);
                 html += `<span class="raw-toggle" onclick="toggleRaw()">Show raw response</span>`;
                 html += `<div class="raw-content" id="rawContent">${JSON.stringify(data.raw_response || {}, null, 2)}</div>`;
-
                 content.innerHTML = html;
             } catch (e) {
                 content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
             } finally {
-                btn.disabled = false;
+                disableAllBtns(false);
+            }
+        }
+
+        // --- Batch generate ---
+        async function generateBatch() {
+            const section = document.getElementById('resultSection');
+            const content = document.getElementById('resultContent');
+            const prompt = document.getElementById('prompt').value.trim();
+            const count = parseInt(document.getElementById('batchCount').value) || 10;
+            if (!prompt) { alert('Please enter a prompt'); return; }
+
+            disableAllBtns(true);
+            section.classList.add('visible');
+            content.innerHTML = `<div class="loading">Batch generating ${count} images...</div>`;
+
+            const formData = new FormData();
+            formData.append('prompt', prompt);
+            formData.append('width', document.getElementById('width').value);
+            formData.append('height', document.getElementById('height').value);
+            formData.append('negative_prompt', document.getElementById('negative_prompt').value);
+            formData.append('force_single', document.getElementById('force_single').checked);
+            appendRefFields(formData);
+            formData.append('count', count);
+            appendFiles(formData);
+
+            try {
+                const resp = await fetch('/api/generate_batch', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    content.innerHTML = `<div class="error">${data.error || 'Unknown error'}</div>`;
+                    return;
+                }
+                content.innerHTML = renderBatchResults(data);
+            } catch (e) {
+                content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
+            } finally {
+                disableAllBtns(false);
+            }
+        }
+
+        // --- Parameter sweep ---
+        async function generateSweep() {
+            const section = document.getElementById('resultSection');
+            const content = document.getElementById('resultContent');
+            const prompt = document.getElementById('prompt').value.trim();
+            if (!prompt) { alert('Please enter a prompt'); return; }
+
+            const total = parseInt(document.getElementById('comboCount').textContent);
+            const estTime = document.getElementById('comboTime').textContent;
+
+            if (total > 20 && !confirm(`Will generate ${total} images (${estTime}). Continue?`)) return;
+
+            disableAllBtns(true);
+            section.classList.add('visible');
+            const startTime = Date.now();
+            content.innerHTML = `<div class="loading">Parameter sweep: 0/${total} completed (${estTime} est.)...</div>`;
+            const progressTimer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const min = Math.floor(elapsed / 60);
+                const sec = elapsed % 60;
+                const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
+                content.innerHTML = `<div class="loading">Parameter sweep: ${total} combinations, ${timeStr} elapsed...</div>`;
+            }, 2000);
+
+            const formData = new FormData();
+            formData.append('prompt', prompt);
+            formData.append('width', document.getElementById('width').value);
+            formData.append('height', document.getElementById('height').value);
+            formData.append('negative_prompt', document.getElementById('negative_prompt').value);
+            formData.append('force_single', document.getElementById('force_single').checked);
+            appendRefFields(formData);
+            formData.append('guidance_scales', document.getElementById('sweep_gs').value);
+            formData.append('cfg_rescale_factors', document.getElementById('sweep_cfg').value);
+            formData.append('edit_text_weights', document.getElementById('sweep_tw').value);
+            formData.append('edit_image_weights', document.getElementById('sweep_iw').value);
+            appendFiles(formData);
+
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), total * 30000 + 60000);
+                const resp = await fetch('/api/generate_sweep', {
+                    method: 'POST', body: formData, signal: controller.signal
+                });
+                clearTimeout(timeout);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    content.innerHTML = `<div class="error">${data.error || 'Unknown error'}</div>`;
+                    return;
+                }
+                content.innerHTML = renderBatchResults(data);
+            } catch (e) {
+                if (e.name === 'AbortError') {
+                    content.innerHTML = `<div class="error">Request timed out. Try fewer parameter combinations.</div>`;
+                } else {
+                    content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
+                }
+            } finally {
+                clearInterval(progressTimer);
+                disableAllBtns(false);
             }
         }
 
