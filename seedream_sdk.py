@@ -1,6 +1,7 @@
 # seedream_sdk.py
 """Seedream 4.5 image generation SDK wrapping the HTTP multipart API."""
 
+import base64
 import json
 import logging
 from dataclasses import dataclass, field
@@ -110,7 +111,6 @@ class SeedreamClient:
             resp_json = {}
 
         # Extract images from afr_data
-        import base64
         raw_images = []
         afr_data = body.get("data", {}).get("afr_data", [])
         for item in afr_data:
