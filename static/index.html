@@ -486,10 +486,11 @@
             }
         }
 
-        // --- Orchestrate full pipeline ---
+        // --- Orchestrate: JSON+photo → prompt → batch → eval → ranked ---
         async function runOrchestrate() {
             const section = document.getElementById('resultSection');
             const content = document.getElementById('resultContent');
+            const count = parseInt(document.getElementById('batchCount').value) || 10;
 
             let inputJson;
             try {
@@ -504,17 +505,20 @@
             disableAllBtns(true);
             section.classList.add('visible');
             const startTime = Date.now();
-            content.innerHTML = '<div class="loading">Running orchestration pipeline...</div>';
+            content.innerHTML = `<div class="loading">Generating prompt + batch ${count} images + eval...</div>`;
             const progressTimer = setInterval(() => {
                 const elapsed = Math.floor((Date.now() - startTime) / 1000);
                 const min = Math.floor(elapsed / 60);
                 const sec = elapsed % 60;
                 const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
-                content.innerHTML = `<div class="loading">Orchestrating... ${timeStr} elapsed</div>`;
+                content.innerHTML = `<div class="loading">Orchestrating ${count} images... ${timeStr} elapsed</div>`;
             }, 2000);
 
             const formData = new FormData();
             formData.append('input_json', JSON.stringify(inputJson));
+            formData.append('count', count);
+            formData.append('use_refs', document.getElementById('use_refs').checked);
+            formData.append('ref_count', document.getElementById('ref_count').value || '2');
             if (photoFile) {
                 formData.append('anchor_photo', photoFile);
             }
@@ -522,7 +526,7 @@
             try {
                 const resp = await fetch('/api/orchestrate', {
                     method: 'POST', body: formData,
-                    signal: AbortSignal.timeout(300000),
+                    signal: AbortSignal.timeout(600000),
                 });
                 const data = await resp.json();
                 if (!resp.ok) {
@@ -531,33 +535,48 @@
                 }
 
                 let html = '';
-                html += `<div class="batch-summary">`;
-                html += `<strong>${data.passed ? 'PASSED' : 'BEST EFFORT'}</strong> `;
-                html += `Score: ${data.score} | Rounds: ${data.rounds}`;
+                html += `<div class="batch-summary"><strong>${data.success}</strong> / ${data.total} generated`;
+                if (data.failed > 0) html += `, <strong style="color:#dc2626">${data.failed} failed</strong>`;
                 html += `</div>`;
 
-                if (data.image) {
-                    html += `<div class="result-images"><img src="${data.image}" alt="Result"></div>`;
+                if (data.prompt) {
+                    html += `<span class="collapsible" onclick="toggleCollapse(this)">Generated Prompt</span>`;
+                    html += `<div class="collapse-content"><div class="llm-result">${data.prompt}</div></div>`;
                 }
 
-                if (data.eval_history && data.eval_history.length > 0) {
-                    html += `<div style="margin-top:12px;">`;
-                    for (let i = 0; i < data.eval_history.length; i++) {
-                        const ev = data.eval_history[i];
-                        html += `<span class="collapsible" onclick="toggleCollapse(this)">Round ${i}: score=${ev.total_score}</span>`;
-                        html += `<div class="collapse-content"><div class="llm-result">`;
-                        html += `Dimensions: ${JSON.stringify(ev.dimensions, null, 2)}\n`;
-                        if (ev.issues.length) html += `Issues: ${ev.issues.join(', ')}\n`;
-                        if (ev.suggestion) html += `Suggestion: ${ev.suggestion}`;
-                        html += `</div></div>`;
-                    }
+                if (data.errors && data.errors.length > 0) {
+                    html += `<div class="batch-errors">`;
+                    for (const err of data.errors) html += `Seed ${err.seed}: ${err.error}<br>`;
                     html += `</div>`;
+                }
+
+                if (data.results && data.results.length > 0) {
+                    html += '<div class="batch-grid">';
+                    for (const r of data.results) {
+                        const ev = r.eval || {};
+                        const scoreColor = ev.score >= 8 ? '#059669' : ev.score >= 6 ? '#b45309' : '#dc2626';
+                        html += `<div class="batch-card">`;
+                        for (const img of r.images) {
+                            html += `<img src="${img}" alt="generated">`;
+                        }
+                        html += `<div class="card-params" style="color:${scoreColor}; font-weight:bold;">Score: ${ev.score || '-'} ${ev.passed ? '✓' : ''}</div>`;
+                        html += `<div class="card-meta">Seed: ${r.seed}</div>`;
+                        if (ev.dimensions) {
+                            html += `<span class="collapsible" onclick="toggleCollapse(this)" style="font-size:11px;">Eval Details</span>`;
+                            html += `<div class="collapse-content"><div class="llm-result" style="font-size:10px;">`;
+                            html += Object.entries(ev.dimensions).map(([k,v]) => `${k}: ${v}`).join('\n');
+                            if (ev.issues && ev.issues.length) html += `\n\nIssues:\n${ev.issues.join('\n')}`;
+                            html += `</div></div>`;
+                        }
+                        html += `</div>`;
+                    }
+                    html += '</div>';
                 }
 
                 content.innerHTML = html;
             } catch (e) {
                 if (e.name === 'TimeoutError') {
-                    content.innerHTML = `<div class="error">Request timed out (5min).</div>`;
+                    content.innerHTML = `<div class="error">Request timed out (10min).</div>`;
                 } else {
                     content.innerHTML = `<div class="error">Request failed: ${e.message}</div>`;
                 }
